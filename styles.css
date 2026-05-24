@@ -121,6 +121,8 @@ body {
   justify-content: space-between;
   padding: 0 24px;
   z-index: 100;
+  /* Bug #200 - 添加 -webkit- 前缀支持 Safari */
+  -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
 
@@ -957,6 +959,9 @@ body {
 @media (max-width: 1024px) {
   .sidebar {
     transform: translateX(-100%);
+    /* Bug #183, #189 - 隐藏时禁止交互和可见性，防止拦截触摸事件 */
+    visibility: hidden;
+    pointer-events: none;
   }
   
   .main-content {
@@ -998,6 +1003,12 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-tertiary);
+}
+
+/* Bug #205 - Firefox 滚动条样式 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) var(--bg-secondary);
 }
 
 /* 动画 */
@@ -1729,6 +1740,13 @@ body {
 
   .chart-card.large .chart-content {
     height: 250px;
+  }
+
+  /* Bug #207 - 分页页脚在窄屏幕上改为纵向排列 */
+  .table-footer {
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
   }
 }
 

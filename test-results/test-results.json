@@ -1,0 +1,50 @@
+{
+  "results": [
+    {
+      "test": "Page load without JS errors",
+      "status": "PASS",
+      "message": ""
+    },
+    {
+      "test": "Navigation switching (overview→analytics→realtime→reports→overview)",
+      "status": "PASS",
+      "message": ""
+    },
+    {
+      "test": "Search \"MacBook\" has results",
+      "status": "PASS",
+      "message": "Found 10 rows, first product: MacBook Pro"
+    },
+    {
+      "test": "Filter \"completed\" works",
+      "status": "FAIL",
+      "message": "page.waitForSelector: Timeout 5000ms exceeded.\nCall log:\n  - waiting for locator('.filter-panel') to be visible\n    14 × locator resolved to hidden <div class=\"filter-panel\">…</div>\n"
+    },
+    {
+      "test": "Pagination switching",
+      "status": "FAIL",
+      "message": "Page info did not change"
+    },
+    {
+      "test": "Theme toggle",
+      "status": "PASS",
+      "message": "Changed from light to dark"
+    },
+    {
+      "test": "Export function",
+      "status": "PASS",
+      "message": "Export triggered without errors"
+    },
+    {
+      "test": "Final state screenshot",
+      "status": "PASS",
+      "message": "Saved to 08-final.png"
+    }
+  ],
+  "summary": {
+    "total": 8,
+    "passed": 6,
+    "failed": 2,
+    "skipped": 0
+  }
+}

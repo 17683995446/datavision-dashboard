@@ -1,0 +1,2748 @@
+/**
+ * DataVision - 极致数据可视化平台
+ * 主应用脚本（完整重写版）
+ * 第9轮修复：修复20个混乱场景下的隐藏缺陷（#129-#152）
+ * 第10轮修复：修复30个资源管理与竞态缺陷（#153-#209）
+ * 第11轮修复：修复14个边界条件与健壮性缺陷（#210-#232）
+ */
+
+// ==================== 全局状态 ====================
+
+// Bug #98 - 使用命名空间避免全局污染
+const DataVision = {
+  // 存储所有图表实例，用于深色模式切换时更新
+  chartInstances: [],
+  
+  // 仪表盘图表实例引用（用于实时更新）
+  gaugeCharts: {},
+  
+  // 定时器 ID（用于清理）
+  intervals: {
+    gauge: null,
+    log: null
+  },
+  
+  // 事件处理器引用（用于清理）
+  // Bug #153 - 添加 hashchange handler 引用
+  handlers: {
+    notifResize: null,
+    filterResize: null,
+    scroll: null,
+    keydown: null,
+    documentClick: null,
+    hashchange: null
+  },
+  
+  // 搜索防抖定时器
+  searchDebounceTimer: null,
+  
+  // 报表搜索防抖定时器
+  reportSearchDebounceTimer: null,
+  
+  // Bug #167 - 移除 themeUpdateLock，依赖 debounce 机制
+
+  // Bug #159, #191 - 主题切换防抖定时器
+  themeDebounceTimer: null,
+
+  // Bug #211 - 滚动防抖定时器
+  scrollDebounceTimer: null,
+
+  // Bug #210 - switchSection 防重入标志
+  _isSwitching: false,
+
+  // Bug #165 - 计数器动画进行中标志
+  _counterAnimating: false,
+
+  // Bug #161 - 上一节区域追踪（用于暂停/恢复实时定时器）
+  _lastSection: null,
+
+  // Bug #218 - Toast 最大数量限制
+  MAX_TOASTS: 5,
+
+  // Bug #229 - Toast 定时器追踪
+  toastTimers: [],
+
+  // Bug #120 - 导出进行中锁
+  exportInProgress: false,
+
+  // Bug #129 - switchSection 入场动画 setTimeout ID 集合
+  entryAnimTimers: [],
+
+  // Bug #131, #132 - IntersectionObserver 引用
+  counterObserver: null,
+  animationObserver: null,
+
+  // Bug #141, #152 - 日志清理 setTimeout ID 集合
+  logCleanupTimers: []
+};
+const chartInstances = DataVision.chartInstances;
+const gaugeCharts = DataVision.gaugeCharts;
+
+// 交易表格数据
+const allTransactions = [
+  { id: 'TRX-2024-001', customer: '张三', product: 'MacBook Pro', amount: 18999, status: 'completed', time: '2分钟前' },
+  { id: 'TRX-2024-002', customer: '李四', product: 'iPhone 15 Pro', amount: 8999, status: 'completed', time: '5分钟前' },
+  { id: 'TRX-2024-003', customer: '王五', product: 'AirPods Pro', amount: 1999, status: 'pending', time: '8分钟前' },
+  { id: 'TRX-2024-004', customer: '赵六', product: 'iPad Air', amount: 4799, status: 'completed', time: '12分钟前' },
+  { id: 'TRX-2024-005', customer: '钱七', product: 'Apple Watch', amount: 2999, status: 'failed', time: '15分钟前' },
+  { id: 'TRX-2024-006', customer: '孙八', product: 'Magic Mouse', amount: 699, status: 'completed', time: '18分钟前' },
+  { id: 'TRX-2024-007', customer: '周九', product: 'Mac Studio', amount: 16999, status: 'pending', time: '22分钟前' },
+  { id: 'TRX-2024-008', customer: '吴十', product: 'Studio Display', amount: 11499, status: 'completed', time: '25分钟前' },
+  { id: 'TRX-2024-009', customer: '郑一', product: 'HomePod', amount: 2299, status: 'completed', time: '28分钟前' },
+  { id: 'TRX-2024-010', customer: '陈二', product: 'Apple TV', amount: 1299, status: 'completed', time: '30分钟前' },
+  { id: 'TRX-2024-011', customer: '林三', product: 'MacBook Air', amount: 9999, status: 'completed', time: '35分钟前' },
+  { id: 'TRX-2024-012', customer: '黄四', product: 'iPad Pro', amount: 8999, status: 'pending', time: '40分钟前' },
+  { id: 'TRX-2024-013', customer: '杨五', product: 'AirPods Max', amount: 4399, status: 'completed', time: '45分钟前' },
+  { id: 'TRX-2024-014', customer: '刘六', product: 'iMac', amount: 14999, status: 'failed', time: '50分钟前' },
+  { id: 'TRX-2024-015', customer: '许七', product: 'Mac mini', amount: 6999, status: 'completed', time: '55分钟前' },
+  { id: 'TRX-2024-016', customer: '何八', product: 'iPhone 15', amount: 5999, status: 'completed', time: '1小时前' },
+  { id: 'TRX-2024-017', customer: '吕九', product: 'Magic Keyboard', amount: 2499, status: 'pending', time: '1小时前' },
+  { id: 'TRX-2024-018', customer: '施十', product: 'Apple Pencil', amount: 999, status: 'completed', time: '1小时前' },
+  { id: 'TRX-2024-019', customer: '张伟', product: 'MacBook Pro 16', amount: 27999, status: 'completed', time: '2小时前' },
+  { id: 'TRX-2024-020', customer: '王芳', product: 'iPhone 15 Pro Max', amount: 10999, status: 'failed', time: '2小时前' },
+  { id: 'TRX-2024-021', customer: '李强', product: 'iPad mini', amount: 3999, status: 'completed', time: '2小时前' },
+  { id: 'TRX-2024-022', customer: '赵敏', product: 'Apple Watch Ultra', amount: 6499, status: 'completed', time: '3小时前' },
+  { id: 'TRX-2024-023', customer: '孙丽', product: 'HomePod mini', amount: 749, status: 'pending', time: '3小时前' },
+  { id: 'TRX-2024-024', customer: '周杰', product: 'Mac Pro', amount: 55999, status: 'completed', time: '3小时前' },
+  { id: 'TRX-2024-025', customer: '吴磊', product: 'Pro Display XDR', amount: 39999, status: 'completed', time: '4小时前' },
+  { id: 'TRX-2024-026', customer: '郑爽', product: 'AirTag 4件装', amount: 779, status: 'completed', time: '4小时前' },
+  { id: 'TRX-2024-027', customer: '冯刚', product: 'MagSafe充电器', amount: 399, status: 'failed', time: '5小时前' },
+  { id: 'TRX-2024-028', customer: '陈晓', product: 'Beats Fit Pro', amount: 1599, status: 'completed', time: '5小时前' },
+  { id: 'TRX-2024-029', customer: '褚明', product: 'Apple TV 4K', amount: 1499, status: 'pending', time: '6小时前' },
+  { id: 'TRX-2024-030', customer: '卫华', product: 'MacBook Pro 14', amount: 19999, status: 'completed', time: '6小时前' },
+  { id: 'TRX-2024-031', customer: '蒋涛', product: 'iPhone SE', amount: 3499, status: 'completed', time: '7小时前' },
+  { id: 'TRX-2024-032', customer: '沈静', product: 'iPad Air 5', amount: 5499, status: 'completed', time: '7小时前' },
+  { id: 'TRX-2024-033', customer: '韩超', product: 'Studio Display', amount: 11499, status: 'pending', time: '8小时前' },
+  { id: 'TRX-2024-034', customer: '杨洋', product: 'Magic Trackpad', amount: 999, status: 'completed', time: '8小时前' },
+  { id: 'TRX-2024-035', customer: '朱迪', product: 'AirPods 3', amount: 1399, status: 'failed', time: '9小时前' },
+  { id: 'TRX-2024-036', customer: '秦风', product: 'Mac Studio Ultra', amount: 31999, status: 'completed', time: '9小时前' },
+  { id: 'TRX-2024-037', customer: '许晴', product: 'Apple Watch SE', amount: 1999, status: 'completed', time: '10小时前' },
+  { id: 'TRX-2024-038', customer: '何冰', product: 'Beats Studio3', amount: 2499, status: 'pending', time: '10小时前' },
+  { id: 'TRX-2024-039', customer: '吕良', product: 'iMac 24', amount: 10999, status: 'completed', time: '11小时前' },
+  { id: 'TRX-2024-040', customer: '施恩', product: 'Mac mini M2', amount: 4499, status: 'completed', time: '12小时前' },
+  { id: 'TRX-2024-041', customer: '张琳', product: 'iPhone 14', amount: 4999, status: 'completed', time: '12小时前' },
+  { id: 'TRX-2024-042', customer: '王浩', product: 'iPad Pro 12.9', amount: 10499, status: 'failed', time: '13小时前' },
+  { id: 'TRX-2024-043', customer: '李娜', product: 'AirPods Pro 2', amount: 1899, status: 'completed', time: '14小时前' },
+  { id: 'TRX-2024-044', customer: '赵鹏', product: 'MacBook Air M2', amount: 9499, status: 'completed', time: '15小时前' },
+  { id: 'TRX-2024-045', customer: '孙悦', product: 'Apple Watch Series 9', amount: 3199, status: 'pending', time: '16小时前' },
+  { id: 'TRX-2024-046', customer: '周涛', product: 'HomePod 2', amount: 2299, status: 'completed', time: '17小时前' },
+  { id: 'TRX-2024-047', customer: '吴京', product: 'Mac Pro Rack', amount: 69999, status: 'completed', time: '18小时前' },
+  { id: 'TRX-2024-048', customer: '郑爽', product: 'iPhone 15 Plus', amount: 7999, status: 'completed', time: '19小时前' },
+  { id: 'TRX-2024-049', customer: '冯绍', product: 'iPad 10', amount: 3599, status: 'failed', time: '20小时前' },
+  { id: 'TRX-2024-050', customer: '陈坤', product: 'Magic Mouse 2', amount: 599, status: 'completed', time: '21小时前' },
+  { id: 'TRX-2024-051', customer: '褚遂', product: 'Beats Solo3', amount: 1799, status: 'completed', time: '22小时前' },
+  { id: 'TRX-2024-052', customer: '卫青', product: 'MacBook Pro 13', amount: 14999, status: 'pending', time: '23小时前' },
+  { id: 'TRX-2024-053', customer: '蒋欣', product: 'AirTag', amount: 229, status: 'completed', time: '1天前' },
+  { id: 'TRX-2024-054', customer: '沈腾', product: 'Apple TV HD', amount: 1099, status: 'completed', time: '1天前' },
+  { id: 'TRX-2024-055', customer: '韩寒', product: 'MagSafe Duo', amount: 999, status: 'failed', time: '1天前' },
+  { id: 'TRX-2024-056', customer: '杨幂', product: 'iPad Pro M4', amount: 8999, status: 'completed', time: '1天前' },
+  { id: 'TRX-2024-057', customer: '朱茵', product: 'Mac Studio Max', amount: 24999, status: 'completed', time: '1天前' },
+  { id: 'TRX-2024-058', customer: '秦岚', product: 'AirPods Max 2', amount: 4999, status: 'pending', time: '2天前' },
+  { id: 'TRX-2024-059', customer: '许巍', product: 'iMac Pro', amount: 49999, status: 'completed', time: '2天前' },
+  { id: 'TRX-2024-060', customer: '何炅', product: 'Beats Flex', amount: 499, status: 'completed', time: '2天前' },
+  { id: 'TRX-2024-061', customer: '吕燕', product: 'MacBook Air 15', amount: 12499, status: 'completed', time: '2天前' },
+  { id: 'TRX-2024-062', customer: '施耐', product: 'Apple Watch Nike', amount: 3499, status: 'failed', time: '3天前' },
+  { id: 'TRX-2024-063', customer: '秦海', product: 'iPad 9', amount: 2499, status: 'completed', time: '3天前' },
+  { id: 'TRX-2024-064', customer: '吴越', product: 'Mac mini Pro', amount: 12999, status: 'completed', time: '3天前' },
+  { id: 'TRX-2024-065', customer: '郑恺', product: 'iPhone 13', amount: 3999, status: 'pending', time: '4天前' },
+  { id: 'TRX-2024-066', customer: '冯小', product: 'AirPods 2', amount: 999, status: 'completed', time: '4天前' },
+  { id: 'TRX-2024-067', customer: '陈赫', product: 'Pro Display', amount: 39999, status: 'completed', time: '5天前' },
+  { id: 'TRX-2024-068', customer: '褚琳', product: 'Beats Powerbeats', amount: 1499, status: 'failed', time: '5天前' },
+  { id: 'TRX-2024-069', customer: '卫兰', product: 'MacBook Air M3', amount: 10999, status: 'completed', time: '5天前' },
+  { id: 'TRX-2024-070', customer: '蒋大', product: 'Apple Watch Ultra 2', amount: 6999, status: 'completed', time: '6天前' },
+  { id: 'TRX-2024-071', customer: '沈月', product: 'iPad Air M2', amount: 6499, status: 'pending', time: '6天前' },
+  { id: 'TRX-2024-072', customer: '韩红', product: 'Mac Pro M2 Ultra', amount: 79999, status: 'completed', time: '7天前' },
+  { id: 'TRX-2024-073', customer: '杨子', product: 'iPhone 14 Pro', amount: 7999, status: 'completed', time: '7天前' },
+  { id: 'TRX-2024-074', customer: '朱丽', product: 'AirPods Pro USB-C', amount: 1899, status: 'failed', time: '8天前' },
+  { id: 'TRX-2024-075', customer: '秦昊', product: 'Mac Studio M2 Max', amount: 29999, status: 'completed', time: '8天前' },
+  { id: 'TRX-2024-076', customer: '许光', product: 'iPad Pro M2', amount: 7999, status: 'completed', time: '9天前' },
+  { id: 'TRX-2024-077', customer: '何穗', product: 'Apple Watch Hermès', amount: 12499, status: 'pending', time: '9天前' },
+  { id: 'TRX-2024-078', customer: '吕良', product: 'MacBook Pro M3 Max', amount: 27999, status: 'completed', time: '10天前' },
+  { id: 'TRX-2024-079', customer: '施华', product: 'Beats Studio Buds', amount: 999, status: 'completed', time: '10天前' },
+  { id: 'TRX-2024-080', customer: '秦刚', product: 'iMac 27', amount: 17999, status: 'failed', time: '11天前' },
+  { id: 'TRX-2024-081', customer: '吴京', product: 'iPhone 15 Pro Max 1TB', amount: 13999, status: 'completed', time: '11天前' },
+  { id: 'TRX-2024-082', customer: '郑爽', product: 'Mac mini M2 Pro', amount: 9999, status: 'completed', time: '12天前' },
+  { id: 'TRX-2024-083', customer: '冯巩', product: 'AirPods Max Lightning', amount: 4399, status: 'pending', time: '12天前' },
+  { id: 'TRX-2024-084', customer: '陈宝', product: 'Studio Display Nano', amount: 11499, status: 'completed', time: '13天前' },
+  { id: 'TRX-2024-085', customer: '褚时', product: 'Mac Pro M2', amount: 59999, status: 'completed', time: '13天前' },
+  { id: 'TRX-2024-086', customer: '卫子', product: 'iPad mini 6', amount: 3799, status: 'failed', time: '14天前' },
+  { id: 'TRX-2024-087', customer: '蒋雯', product: 'Apple Watch Series 8', amount: 2999, status: 'completed', time: '14天前' },
+  { id: 'TRX-2024-088', customer: '沈从', product: 'MacBook Air M1', amount: 7999, status: 'completed', time: '15天前' },
+  { id: 'TRX-2024-089', customer: '韩梅', product: 'iPhone 12', amount: 3499, status: 'pending', time: '15天前' },
+  { id: 'TRX-2024-090', customer: '杨丽', product: 'AirPods 3 USB-C', amount: 1399, status: 'completed', time: '16天前' },
+  { id: 'TRX-2024-091', customer: '朱骏', product: 'Mac Studio M2 Ultra', amount: 42999, status: 'completed', time: '16天前' },
+  { id: 'TRX-2024-092', customer: '秦鹏', product: 'iPad Pro 11 M4', amount: 7999, status: 'failed', time: '17天前' },
+  { id: 'TRX-2024-093', customer: '许巍', product: 'Apple Watch Edition', amount: 9999, status: 'completed', time: '17天前' },
+  { id: 'TRX-2024-094', customer: '何平', product: 'MacBook Pro 14 M3', amount: 16999, status: 'completed', time: '18天前' },
+  { id: 'TRX-2024-095', customer: '吕蒙', product: 'iPhone 14 Plus', amount: 6999, status: 'pending', time: '18天前' },
+  { id: 'TRX-2024-096', customer: '施恩', product: 'Beats Pill', amount: 1299, status: 'completed', time: '19天前' }
+];
+
+// 分页状态
+let currentPage = 1;
+const pageSize = 10;
+// Bug #223 - filteredTransactions 初始值为空数组，由 applyFilters 填充
+let filteredTransactions = [];
+
+// 当前筛选状态
+let currentStatusFilter = 'all';
+let currentSearchQuery = '';
+
+// Bug #44 - 模块级变量：当前日志过滤级别
+let currentLogLevel = 'all';
+
+// Bug #84 - 页面卸载时清理所有资源
+window.addEventListener('beforeunload', () => {
+  // 清理定时器
+  if (DataVision.intervals.gauge) { clearInterval(DataVision.intervals.gauge); }
+  if (DataVision.intervals.log) { clearInterval(DataVision.intervals.log); }
+
+  // 清理防抖定时器
+  if (DataVision.searchDebounceTimer) clearTimeout(DataVision.searchDebounceTimer);
+  if (DataVision.reportSearchDebounceTimer) clearTimeout(DataVision.reportSearchDebounceTimer);
+  // Bug #191 - 清理主题切换防抖定时器
+  if (DataVision.themeDebounceTimer) clearTimeout(DataVision.themeDebounceTimer);
+  // Bug #211 - 清理滚动防抖定时器
+  if (DataVision.scrollDebounceTimer) clearTimeout(DataVision.scrollDebounceTimer);
+  
+  // Bug #166 - 清理入场动画和日志清理定时器
+  DataVision.entryAnimTimers.forEach(timerId => clearTimeout(timerId));
+  DataVision.entryAnimTimers = [];
+  DataVision.logCleanupTimers.forEach(timerId => clearTimeout(timerId));
+  DataVision.logCleanupTimers = [];
+  // Bug #229 - 清理 toast 定时器
+  DataVision.toastTimers.forEach(timerId => clearTimeout(timerId));
+  DataVision.toastTimers = [];
+  
+  // 销毁所有Chart.js实例
+  DataVision.chartInstances.forEach(chart => {
+    if (chart && typeof chart.destroy === 'function') {
+      chart.destroy();
+    }
+  });
+  DataVision.chartInstances.length = 0;
+  
+  // Bug #241 - gaugeCharts 引用的图表已在 chartInstances 中销毁，只需清空引用
+  DataVision.gaugeCharts = {};
+  
+  // 清理事件监听器
+  if (DataVision.handlers.notifResize) {
+    window.removeEventListener('resize', DataVision.handlers.notifResize);
+  }
+  if (DataVision.handlers.filterResize) {
+    window.removeEventListener('resize', DataVision.handlers.filterResize);
+  }
+  // Bug #160 - scroll handler 移除时匹配 passive 选项
+  if (DataVision.handlers.scroll) {
+    window.removeEventListener('scroll', DataVision.handlers.scroll, { passive: true });
+  }
+  if (DataVision.handlers.keydown) {
+    document.removeEventListener('keydown', DataVision.handlers.keydown);
+  }
+  if (DataVision.handlers.documentClick) {
+    document.removeEventListener('click', DataVision.handlers.documentClick);
+  }
+  // Bug #153 - 清理 hashchange handler
+  if (DataVision.handlers.hashchange) {
+    window.removeEventListener('hashchange', DataVision.handlers.hashchange);
+  }
+  
+  // Bug #222 - 断开 IntersectionObserver 连接
+  if (DataVision.counterObserver) DataVision.counterObserver.disconnect();
+  if (DataVision.animationObserver) DataVision.animationObserver.disconnect();
+});
+
+/**
+ * 转义 HTML 特殊字符，防止 XSS 攻击
+ */
+function escapeHtml(str) {
+  DVLogger.init('escapeHtml');
+  // Bug #145 - 空值检查，防止 null/undefined 显示为字符串
+  if (str == null) return '';
+  // Bug #168 - 使用正则替换代替 DOM 创建，更高效且避免潜在问题
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ==================== 页面加载入口 ====================
+
+// 监听页面完全加载（包括所有资源）后隐藏加载动画并初始化应用
+window.addEventListener('load', () => {
+  document.getElementById('loader').classList.add('hidden');
+  initApp();
+});
+
+/**
+ * 初始化应用 - 按顺序初始化各功能模块
+ */
+function initApp() {
+  DVLogger.init('initApp');
+  initNavigation();
+  initAnimations();
+  initCharts();
+  initCounters();
+  initTable();
+  initSearch();
+  initPagination();
+  initDateRange();
+  initExportButton();
+  initFilterPanel();
+  initTableActions();
+  initNotifications();
+  initLogs();
+  initThemeToggle();
+  initAnalyticsCharts();
+  initReportActions();
+  initMiscButtons();
+  initGlobalClickHandler();
+  simulateRealtimeUpdates();
+}
+
+// ==================== Toast 通知系统 ====================
+
+/**
+ * 显示 Toast 通知
+ * @param {string} message - 通知消息内容
+ * @param {string} type - 通知类型：'success' | 'error' | 'info' | 'warning'
+ */
+function showToast(message, type = 'success') {
+  DVLogger.init('showToast');
+  // 如果 Toast 容器不存在则创建
+  let toastContainer = document.getElementById('toastContainer');
+  if (!toastContainer) {
+    DVLogger.branch('toastContainer_create', true);
+    toastContainer = document.createElement('div');
+    toastContainer.id = 'toastContainer';
+    toastContainer.style.cssText = 'position:fixed;top:80px;right:24px;z-index:10000;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+    document.body.appendChild(toastContainer);
+  }
+
+  // 根据类型选择颜色
+  const colorMap = {
+    success: '#10b981',
+    error: '#ef4444',
+    info: '#3b82f6',
+    warning: '#f59e0b'
+  };
+  const iconMap = {
+    success: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
+    error: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+    info: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+    warning: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+  };
+
+  const toast = document.createElement('div');
+  // Bug #115 - CSS变量添加fallback，防止CSS加载前Toast不可见
+  toast.style.cssText = `
+    display:flex;align-items:center;gap:10px;padding:14px 20px;
+    background:var(--bg-primary, #ffffff);border:1px solid var(--border, #e2e8f0);
+    border-left:4px solid ${colorMap[type]};
+    border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,0.15);
+    font-size:14px;color:var(--text-primary, #1e293b);pointer-events:auto;
+    transform:translateX(120%);transition:transform 0.4s cubic-bezier(0.4,0,0.2,1),opacity 0.4s;
+    max-width:360px;
+  `;
+  const iconSpan = document.createElement('span');
+  iconSpan.style.cssText = `color:${colorMap[type]};flex-shrink:0;`;
+  // Bug #58 - iconMap missing default fallback
+  iconSpan.innerHTML = iconMap[type] || iconMap['info'] || '';
+  const msgSpan = document.createElement('span');
+  msgSpan.textContent = message;
+  toast.appendChild(iconSpan);
+  toast.appendChild(msgSpan);
+
+  toastContainer.appendChild(toast);
+
+  // Bug #218 - 限制最大 Toast 数量，防止无限累积
+  while (toastContainer.children.length > DataVision.MAX_TOASTS) {
+    DVLogger.branch('MAX_TOASTS_triggered', toastContainer.children.length);
+    const oldest = toastContainer.firstChild;
+    if (oldest) {
+      oldest.style.transform = 'translateX(120%)';
+      oldest.style.opacity = '0';
+      setTimeout(() => { if (oldest.parentNode) oldest.parentNode.removeChild(oldest); }, 400);
+    }
+  }
+
+  // 入场动画
+  requestAnimationFrame(() => {
+    toast.style.transform = 'translateX(0)';
+  });
+
+  // 3秒后自动消失
+  // Bug #229 - 追踪 toast 定时器以便清理
+  const toastTimer = setTimeout(() => {
+    DVLogger.timer('setTimeout', 'toast');
+    toast.style.transform = 'translateX(120%)';
+    toast.style.opacity = '0';
+    const removeTimer = setTimeout(() => {
+      DVLogger.timer('setTimeout', 'toastRemove');
+      if (toast.parentNode) toast.parentNode.removeChild(toast);
+      // 从追踪列表中移除
+      const idx = DataVision.toastTimers.indexOf(removeTimer);
+      if (idx !== -1) DataVision.toastTimers.splice(idx, 1);
+    }, 400);
+    DataVision.toastTimers.push(removeTimer);
+    // 从追踪列表中移除自身
+    const tIdx = DataVision.toastTimers.indexOf(toastTimer);
+    if (tIdx !== -1) DataVision.toastTimers.splice(tIdx, 1);
+  }, 3000);
+  DataVision.toastTimers.push(toastTimer);
+}
+
+// ==================== 导航功能 ====================
+
+/**
+ * 初始化导航 - 顶部导航与侧边栏导航联动
+ */
+function initNavigation() {
+  DVLogger.init('initNavigation');
+  const navLinks = document.querySelectorAll('.nav-link');
+  const sidebarLinks = document.querySelectorAll('.sidebar-link[href^="#"]');
+  const sections = document.querySelectorAll('.section');
+
+  // 通用导航切换函数
+  function switchSection(targetId) {
+    // Bug #171 - 防重入保护
+    if (DataVision._isSwitching) { DVLogger.branch('_isSwitching', true); return; }
+    DataVision._isSwitching = true;
+    DVLogger.state('_isSwitching', true);
+    try {
+      // Bug #172 - 验证目标 section 是否存在，不存在则回退到 overview
+      const validSections = document.querySelectorAll('.section');
+      const validIds = Array.from(validSections).map(s => s.id);
+      if (!validIds.includes(targetId)) {
+        DVLogger.branch('targetId_fallback', targetId);
+        targetId = 'overview';
+      }
+
+      // Bug #129 - 清理上一轮的入场动画 setTimeout，防止"幽灵"回调
+      DataVision.entryAnimTimers.forEach(timerId => clearTimeout(timerId));
+      DataVision.entryAnimTimers = [];
+
+      // 更新所有导航的 active 状态
+      navLinks.forEach(l => {
+        l.classList.remove('active');
+        if (l.getAttribute('href') === '#' + targetId) l.classList.add('active');
+      });
+      sidebarLinks.forEach(l => {
+        l.classList.remove('active');
+        if (l.getAttribute('href') === '#' + targetId) l.classList.add('active');
+      });
+
+      // 切换内容区域
+      sections.forEach(section => {
+        section.classList.remove('active');
+        if (section.id === targetId) {
+          section.classList.add('active');
+        }
+      });
+
+      // Bug #148 - 离开实时监控时暂停定时器，返回时恢复
+      // Bug #195 - 只在定时器不存在且 _lastSection 不为 null 时恢复
+      if (targetId === 'realtime') {
+        if (!DataVision.intervals.gauge && DataVision._lastSection !== null) {
+          simulateRealtimeUpdates();
+        }
+      } else if (DataVision._lastSection === 'realtime') {
+        // 离开实时监控，暂停定时器
+        if (DataVision.intervals.gauge) {
+          clearInterval(DataVision.intervals.gauge);
+          DVLogger.timer('clearInterval', 'gauge');
+          DataVision.intervals.gauge = null;
+        }
+        if (DataVision.intervals.log) {
+          clearInterval(DataVision.intervals.log);
+          DVLogger.timer('clearInterval', 'log');
+          DataVision.intervals.log = null;
+        }
+      }
+      DataVision._lastSection = targetId;
+      DVLogger.state('_lastSection', targetId);
+
+      // Update URL hash without triggering hashchange
+      if (history.replaceState) {
+        DVLogger.branch('replaceState', true);
+        history.replaceState(null, '', '#' + targetId);
+        // Bug #234 - replaceState 不触发 hashchange，可以立即重置
+        DataVision._isSwitching = false;
+        DVLogger.state('_isSwitching', false);
+      } else {
+        DVLogger.branch('location.hash', true);
+        location.hash = targetId;
+        // Bug #234 - hashchange 是异步派发的，_isSwitching 需要在 hashchange 回调之后才重置
+        setTimeout(() => { DataVision._isSwitching = false; DVLogger.state('_isSwitching', false); }, 0);
+        return; // 跳过后续动画触发，避免 hashchange 递归时双重执行
+      }
+
+      // Bug #57 - IntersectionObserver on hidden sections: manually trigger animations
+      const activeSection = document.getElementById(targetId);
+      if (activeSection) {
+        // Bug #139 - 重置计数器的 _counterAnimated 标志，允许重新动画
+        const counters = activeSection.querySelectorAll('.metric-value[data-target]');
+        counters.forEach(counter => {
+          counter._counterAnimated = false;
+          if (counter._counterAnimFrame) {
+            cancelAnimationFrame(counter._counterAnimFrame);
+            counter._counterAnimFrame = null;
+          }
+          const target = parseFloat(counter.dataset.target);
+          const prefix = counter.dataset.prefix || '';
+          const suffix = counter.dataset.suffix || '';
+          animateCounter(counter, target, prefix, suffix);
+        });
+
+        // Bug #144 - 重置动画类，确保每次进入 section 都有入场动画
+        const animatedEls = activeSection.querySelectorAll('[data-animate]');
+        animatedEls.forEach(el => {
+          el.classList.remove('animated');
+          const delay = el.dataset.delay || 0;
+          // Bug #174 - delay=0 时使用 requestAnimationFrame 双帧确保浏览器渲染
+          let timerId;
+          if (delay === 0) {
+            timerId = setTimeout(() => {
+              requestAnimationFrame(() => {
+                el.classList.add('animated');
+              });
+            }, 0);
+          } else {
+            timerId = setTimeout(() => {
+              DVLogger.timer('setTimeout', 'entryAnim');
+              el.classList.add('animated');
+            }, delay);
+          }
+          DataVision.entryAnimTimers.push(timerId);
+        });
+      }
+    } catch (e) {
+      console.error('switchSection error:', e);
+      DataVision._isSwitching = false;
+      DVLogger.state('_isSwitching', false);
+    }
+  }
+
+  // 顶部导航点击事件
+  navLinks.forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const targetId = link.getAttribute('href').substring(1);
+      switchSection(targetId);
+    });
+  });
+
+  // 侧边栏导航点击事件（同步更新顶部导航）
+  sidebarLinks.forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const targetId = link.getAttribute('href').substring(1);
+      switchSection(targetId);
+    });
+  });
+
+  // Bug #3 - hashchange event listener for browser back-forward
+  // Bug #153 - 存储 handler 引用以便清理
+  DataVision.handlers.hashchange = () => {
+    const hash = location.hash.substring(1);
+    if (hash) {
+      switchSection(hash);
+    }
+  };
+  window.addEventListener('hashchange', DataVision.handlers.hashchange);
+
+  // Bug #3 - Check initial hash on page load
+  const initialHash = location.hash.substring(1);
+  if (initialHash) {
+    switchSection(initialHash);
+  } else {
+    // 默认显示第一个区域
+    document.getElementById('overview').classList.add('active');
+  }
+}
+
+// ==================== 动画初始化 ====================
+
+/**
+ * 初始化滚动入场动画
+ */
+function initAnimations() {
+  DVLogger.init('initAnimations');
+  const animatedElements = document.querySelectorAll('[data-animate]');
+
+  // Bug #132 - 存储观察者引用，允许后续断开连接或重新观察
+  if (DataVision.animationObserver) {
+    DataVision.animationObserver.disconnect();
+  }
+
+  DataVision.animationObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const delay = entry.target.dataset.delay || 0;
+        // Bug #162 - 追踪 setTimeout ID 以便后续清理
+        const timerId = setTimeout(() => {
+          DVLogger.timer('setTimeout', 'entryAnim');
+          entry.target.classList.add('animated');
+        }, delay);
+        DataVision.entryAnimTimers.push(timerId);
+        DataVision.animationObserver.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1 });
+
+  animatedElements.forEach(el => DataVision.animationObserver.observe(el));
+}
+
+// ==================== 图表初始化 ====================
+
+/**
+ * Bug #5, #85 - Helper function to create a chart, destroying any existing instance on the same canvas.
+ * Prevents memory leaks when charts are re-initialized.
+ * @param {string} canvasId - The canvas element ID
+ * @param {object} config - Chart.js configuration
+ * @returns {Chart|null} The new chart instance, or null if canvas not found
+ */
+function createChart(canvasId, config) {
+  DVLogger.init('createChart');
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) { DVLogger.branch('canvas_null', canvasId); return null; }
+
+  // Bug #133 - 检查 Chart.js 是否可用
+  if (typeof Chart === 'undefined') {
+    DVLogger.branch('Chart_undefined', true);
+    console.warn('Chart.js 未加载，跳过图表创建:', canvasId);
+    return null;
+  }
+
+  try {
+    // Bug #85 - 彻底清理现有Chart实例
+    const existingChartIndex = DataVision.chartInstances.findIndex(c => c.canvas && c.canvas.id === canvasId);
+    if (existingChartIndex !== -1) {
+      const existingChart = DataVision.chartInstances[existingChartIndex];
+      existingChart.destroy();
+      DataVision.chartInstances.splice(existingChartIndex, 1);
+    }
+
+    // Bug #213 - 清理 gaugeCharts 中的陈旧引用
+    if (DataVision.gaugeCharts[canvasId]) {
+      delete DataVision.gaugeCharts[canvasId];
+    }
+
+    // Bug #109 - 移除cloneNode，Chart.js的destroy()已足够清理canvas
+    const chart = new Chart(canvas, config);
+    DataVision.chartInstances.push(chart);
+    return chart;
+  } catch (e) {
+    console.error('创建图表失败:', canvasId, e);
+    return null;
+  }
+}
+
+/**
+ * 获取当前主题下的图表颜色配置
+ * 通过 getComputedStyle 读取 CSS 变量值
+ * Bug #114 - 添加fallback值，防止CSS变量未定义时图表不可见
+ */
+function getChartThemeColors() {
+  DVLogger.init('getChartThemeColors');
+  const style = getComputedStyle(document.documentElement);
+  const get = (varName, fallback) => style.getPropertyValue(varName).trim() || fallback;
+  return {
+    textPrimary: get('--text-primary', '#1e293b'),
+    textSecondary: get('--text-secondary', '#475569'),
+    textTertiary: get('--text-tertiary', '#94a3b8'),
+    border: get('--border', '#e2e8f0'),
+    bgPrimary: get('--bg-primary', '#ffffff'),
+    bgSecondary: get('--bg-secondary', '#f8fafc')
+  };
+}
+
+/**
+ * 初始化概览页面图表
+ */
+function initCharts() {
+  DVLogger.init('initCharts');
+  const colors = getChartThemeColors();
+
+  // 收入趋势图
+  const revenueChart = createChart('revenueChart', {
+    type: 'line',
+    data: {
+      labels: ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
+      datasets: [{
+        label: '2024年',
+        data: [1800000, 2100000, 1950000, 2400000, 2200000, 2600000, 2800000, 2500000, 2900000, 3100000, 2700000, 2847500],
+        borderColor: '#667eea',
+        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 4,
+        pointHoverRadius: 6
+      }, {
+        label: '2023年',
+        data: [1500000, 1700000, 1600000, 1900000, 1800000, 2100000, 2200000, 2000000, 2300000, 2400000, 2200000, 2350000],
+        borderColor: '#94a3b8',
+        backgroundColor: 'transparent',
+        borderDash: [5, 5],
+        tension: 0.4,
+        pointRadius: 0,
+        pointHoverRadius: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: {
+          position: 'top',
+          align: 'end',
+          labels: { usePointStyle: true, padding: 20, color: colors.textSecondary }
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          grid: { color: colors.border },
+          ticks: {
+            color: colors.textTertiary,
+            callback: (value) => '¥' + (value / 10000).toFixed(0) + '万'
+          }
+        },
+        x: {
+          grid: { display: false },
+          ticks: { color: colors.textTertiary }
+        }
+      }
+    }
+  });
+
+  // 用户分布图
+  createChart('userDistributionChart', {
+    type: 'doughnut',
+    data: {
+      labels: ['新用户', '活跃用户', '沉睡用户', '流失用户'],
+      datasets: [{
+        data: [35, 45, 15, 5],
+        backgroundColor: ['#667eea', '#10b981', '#f59e0b', '#ef4444'],
+        borderWidth: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '70%',
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { usePointStyle: true, padding: 15, color: colors.textSecondary }
+        }
+      }
+    }
+  });
+
+  // 销售渠道图
+  createChart('salesChannelChart', {
+    type: 'polarArea',
+    data: {
+      labels: ['线上商城', '移动应用', '社交媒体', '线下门店', '合作伙伴'],
+      datasets: [{
+        data: [40, 30, 15, 10, 5],
+        backgroundColor: [
+          'rgba(102, 126, 234, 0.7)',
+          'rgba(16, 185, 129, 0.7)',
+          'rgba(245, 158, 11, 0.7)',
+          'rgba(239, 68, 68, 0.7)',
+          'rgba(139, 92, 246, 0.7)'
+        ],
+        borderWidth: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { usePointStyle: true, padding: 10, color: colors.textSecondary }
+        }
+      },
+      scales: {
+        r: {
+          ticks: { display: false },
+          grid: { color: colors.border }
+        }
+      }
+    }
+  });
+
+  // 产品类别表现图
+  createChart('categoryChart', {
+    type: 'bar',
+    data: {
+      labels: ['电子产品', '服装配饰', '家居用品', '食品饮料', '美妆护肤', '运动户外', '图书文具', '母婴用品'],
+      datasets: [{
+        label: '销售额',
+        data: [850000, 620000, 480000, 390000, 520000, 340000, 180000, 290000],
+        backgroundColor: '#667eea',
+        borderRadius: 6
+      }, {
+        label: '目标',
+        data: [800000, 600000, 500000, 400000, 500000, 350000, 200000, 300000],
+        backgroundColor: '#e2e8f0',
+        borderRadius: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top',
+          align: 'end',
+          labels: { color: colors.textSecondary }
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          grid: { color: colors.border },
+          ticks: {
+            color: colors.textTertiary,
+            callback: (value) => '¥' + (value / 10000).toFixed(0) + '万'
+          }
+        },
+        x: {
+          grid: { display: false },
+          ticks: { color: colors.textTertiary }
+        }
+      }
+    }
+  });
+
+  // 仪表盘图表
+  initGauges();
+}
+
+/**
+ * 初始化仪表盘图表（半圆环形图）
+ */
+function initGauges() {
+  DVLogger.init('initGauges');
+  const colors = getChartThemeColors();
+  const gaugeConfigs = [
+    { id: 'serverLoadGauge', value: 42, color: '#10b981' },
+    { id: 'memoryGauge', value: 68, color: '#f59e0b' },
+    { id: 'networkGauge', value: 75, color: '#667eea' }
+  ];
+
+  gaugeConfigs.forEach(config => {
+    const chart = createChart(config.id, {
+      type: 'doughnut',
+      data: {
+        datasets: [{
+          data: [config.value, 100 - config.value],
+          backgroundColor: [config.color, colors.border],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '85%',
+        rotation: -90,
+        circumference: 180,
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: false }
+        }
+      }
+    });
+    if (chart) {
+      DataVision.gaugeCharts[config.id] = chart;
+      // Bug #87 - 存储初始值用于回归算法
+      chart._initialGaugeValue = config.value;
+    }
+  });
+}
+
+/**
+ * 初始化分析页面图表（漏斗图 + 留存率折线图）
+ */
+function initAnalyticsCharts() {
+  DVLogger.init('initAnalyticsCharts');
+  const colors = getChartThemeColors();
+
+  // 漏斗分析图（使用水平柱状图模拟）
+  createChart('funnelChart', {
+    type: 'bar',
+    data: {
+      labels: ['访问页面', '浏览商品', '加入购物车', '提交订单', '完成支付'],
+      datasets: [{
+        label: '用户数',
+        data: [10000, 6500, 3200, 1800, 1200],
+        backgroundColor: [
+          'rgba(102, 126, 234, 0.8)',
+          'rgba(102, 126, 234, 0.65)',
+          'rgba(102, 126, 234, 0.5)',
+          'rgba(102, 126, 234, 0.35)',
+          'rgba(102, 126, 234, 0.2)'
+        ],
+        borderRadius: 6,
+        borderSkipped: false
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              // Bug #151 - 使用图表实际数据的第一个值作为基准，而非硬编码 10000
+              const baseValue = ctx.chart.data.datasets[0].data[0] || 10000;
+              const percentage = baseValue > 0 ? ((ctx.parsed.x / baseValue) * 100).toFixed(1) : '0.0';
+              return `用户数: ${ctx.parsed.x.toLocaleString()} (${percentage}%)`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          beginAtZero: true,
+          grid: { color: colors.border },
+          ticks: {
+            color: colors.textTertiary,
+            callback: (value) => value >= 1000 ? (value / 1000) + 'k' : value
+          }
+        },
+        y: {
+          grid: { display: false },
+          ticks: { color: colors.textSecondary, font: { size: 13 } }
+        }
+      }
+    }
+  });
+
+  // 用户留存率折线图
+  createChart('retentionChart', {
+    type: 'line',
+    data: {
+      labels: ['第1天', '第3天', '第7天', '第14天', '第30天', '第60天', '第90天'],
+      datasets: [{
+        label: '2024年5月',
+        data: [100, 68, 52, 41, 32, 25, 21],
+        borderColor: '#667eea',
+        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 4,
+        pointHoverRadius: 6
+      }, {
+        label: '2024年4月',
+        data: [100, 62, 48, 38, 28, 22, 18],
+        borderColor: '#94a3b8',
+        backgroundColor: 'transparent',
+        borderDash: [5, 5],
+        tension: 0.4,
+        pointRadius: 0,
+        pointHoverRadius: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: {
+          position: 'top',
+          align: 'end',
+          labels: { usePointStyle: true, padding: 15, color: colors.textSecondary }
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          max: 105,
+          grid: { color: colors.border },
+          ticks: {
+            color: colors.textTertiary,
+            callback: (value) => value + '%'
+          }
+        },
+        x: {
+          grid: { display: false },
+          ticks: { color: colors.textTertiary }
+        }
+      }
+    }
+  });
+}
+
+// ==================== 数字计数器动画 ====================
+
+/**
+ * 初始化数字计数器动画
+ */
+function initCounters() {
+  DVLogger.init('initCounters');
+  const counters = document.querySelectorAll('.metric-value[data-target]');
+
+  // Bug #131 - 使用单个共享 IntersectionObserver，避免每个计数器创建一个
+  if (DataVision.counterObserver) {
+    DataVision.counterObserver.disconnect();
+  }
+
+  DataVision.counterObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const counter = entry.target;
+        // Bug #228 - 设置 _counterAnimating 标志，防止与 switchSection 双触发
+        counter._counterAnimating = true;
+        const target = parseFloat(counter.dataset.target);
+        const prefix = counter.dataset.prefix || '';
+        const suffix = counter.dataset.suffix || '';
+        const duration = 2000;
+        let startTime = null;
+
+        const updateCounter = (currentTime) => {
+          // Bug #131 - 检查元素是否仍在DOM中
+          if (!counter.isConnected) return;
+          if (startTime === null) startTime = currentTime;
+          const elapsed = currentTime - startTime;
+          const progress = Math.min(elapsed / duration, 1);
+          const easeProgress = 1 - Math.pow(1 - progress, 3);
+          const current = target * easeProgress;
+
+          if (target % 1 !== 0) {
+            counter.textContent = prefix + current.toFixed(2) + suffix;
+          } else {
+            counter.textContent = prefix + Math.floor(current).toLocaleString() + suffix;
+          }
+
+          if (progress < 1) {
+            counter._counterAnimFrame = requestAnimationFrame(updateCounter);
+          } else {
+            // Bug #228 - 动画完成后重置标志
+            counter._counterAnimating = false;
+          }
+        };
+
+        requestAnimationFrame(updateCounter);
+        DataVision.counterObserver.unobserve(counter);
+      }
+    });
+  }, { threshold: 0.1 });
+
+  counters.forEach(counter => DataVision.counterObserver.observe(counter));
+}
+
+// ==================== 交易表格 ====================
+
+// 状态映射表
+const statusMap = {
+  completed: { text: '已完成', class: 'completed' },
+  pending: { text: '处理中', class: 'pending' },
+  failed: { text: '失败', class: 'failed' }
+};
+
+/**
+ * 初始化交易表格
+ * Bug #88, #104 - 恢复保存的搜索状态
+ */
+function initTable() {
+  DVLogger.init('initTable');
+  // 尝试恢复保存的搜索状态
+  try {
+    const savedSearch = sessionStorage.getItem('dv_searchQuery');
+    const savedStatus = sessionStorage.getItem('dv_statusFilter');
+    const savedPage = sessionStorage.getItem('dv_currentPage');
+    
+    if (savedSearch !== null) {
+      currentSearchQuery = savedSearch;
+      DVLogger.state('currentSearchQuery', currentSearchQuery);
+      const searchInput = document.querySelector('#overview .search-box input');
+      if (searchInput) {
+        // Bug #243 - 恢复搜索值时进行HTML转义，防止XSS
+        searchInput.value = escapeHtml(savedSearch);
+      }
+    }
+    if (savedStatus !== null) {
+      currentStatusFilter = savedStatus;
+      DVLogger.state('currentStatusFilter', currentStatusFilter);
+    }
+    if (savedPage !== null) {
+      currentPage = parseInt(savedPage, 10) || 1;
+      DVLogger.state('currentPage', currentPage);
+    }
+  } catch (e) { /* ignore */ }
+
+  // Bug #170 - 初始化时传入 fromInit 标志，不重置页码
+  applyFilters({ fromInit: true });
+}
+
+/**
+ * 根据当前筛选条件和搜索词过滤并渲染表格
+ * Bug #88, #102, #104, #110 - 修复筛选和分页状态不一致问题
+ * @param {Object} options - 可选参数
+ * @param {boolean} options.fromPagination - 是否来自分页操作（不重置页码）
+ * @param {boolean} options.fromDelete - 是否来自删除操作（智能调整页码）
+ * @param {boolean} options.fromInit - 是否来自初始化（不重置页码）
+ */
+function applyFilters(options = {}) {
+  DVLogger.init('applyFilters');
+  DVLogger.branch('fromPagination', options.fromPagination);
+  DVLogger.branch('fromInit', options.fromInit);
+  DVLogger.branch('fromDelete', options.fromDelete);
+  // Bug #88 - 保存搜索状态到sessionStorage，页面切换后可恢复
+  try {
+    sessionStorage.setItem('dv_searchQuery', currentSearchQuery);
+    sessionStorage.setItem('dv_statusFilter', currentStatusFilter);
+  } catch (e) { /* ignore */ }
+
+  // 应用搜索和状态筛选
+  // Bug #97 - 搜索查询已经转义，使用原始值进行匹配
+  const rawQuery = currentSearchQuery.replace(/\\([.*+?^${}()|[\]\\])/g, '$1').toLowerCase();
+  filteredTransactions = allTransactions.filter(trx => {
+    // 状态筛选
+    const statusMatch = currentStatusFilter === 'all' || trx.status === currentStatusFilter;
+    // 搜索筛选（匹配ID、客户名、产品名）
+    const searchMatch = !rawQuery ||
+      trx.id.toLowerCase().includes(rawQuery) ||
+      trx.customer.toLowerCase().includes(rawQuery) ||
+      trx.product.toLowerCase().includes(rawQuery);
+    return statusMatch && searchMatch;
+  });
+  DVLogger.boundary('filteredTransactions.length', filteredTransactions.length);
+
+  // Bug #110 - 移除错误的URL参数检测，使用显式参数控制页码重置
+  // Bug #170 - fromInit 时也不重置页码
+  if (!options.fromPagination && !options.fromInit) {
+    if (options.fromDelete) {
+      // Bug #121 - 删除后智能调整页码：如果当前页已空则回退
+      const totalPages = Math.ceil(filteredTransactions.length / pageSize);
+      if (currentPage > totalPages && totalPages > 0) {
+        currentPage = totalPages;
+        DVLogger.state('currentPage', currentPage);
+      }
+      // 如果删除后没有数据了，回到第1页
+      if (filteredTransactions.length === 0) {
+        currentPage = 1;
+        DVLogger.state('currentPage', currentPage);
+      }
+    } else {
+      // 搜索/筛选变化时重置到第一页
+      currentPage = 1;
+      DVLogger.state('currentPage', currentPage);
+    }
+  }
+  // Bug #135 - 同步 currentPage 到 sessionStorage，防止导航后恢复旧页码
+  try {
+    sessionStorage.setItem('dv_currentPage', currentPage);
+  } catch (e) { /* ignore */ }
+  renderTable();
+  renderPagination();
+}
+
+/**
+ * 渲染当前页的表格数据
+ */
+function renderTable() {
+  DVLogger.init('renderTable');
+  const tableBody = document.getElementById('transactionTable');
+  if (!tableBody) return;
+
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = startIndex + pageSize;
+  const pageData = filteredTransactions.slice(startIndex, endIndex);
+
+  if (pageData.length === 0) {
+    DVLogger.branch('pageData_empty', true);
+    // Bug #232 - 动态计算 colspan，不再硬编码为 7
+    const thead = tableBody.closest('table')?.querySelector('thead');
+    const colCount = thead ? thead.querySelectorAll('th').length : 7;
+    const cols = colCount;
+    tableBody.innerHTML = `<tr><td colspan="${cols}" style="text-align:center;padding:48px 20px;color:var(--text-tertiary);grid-column:1/-1;"><div style="display:flex;flex-direction:column;align-items:center;gap:8px;"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><span>暂无匹配的交易记录</span><span style="font-size:12px;">请尝试调整搜索条件或筛选状态</span></div></td></tr>`;
+    // Also hide pagination when no results
+    const paginationContainer = document.querySelector('#overview .pagination');
+    if (paginationContainer) paginationContainer.style.display = 'none';
+    return;
+  }
+  // Make sure pagination is visible when there are results
+  const paginationContainer = document.querySelector('#overview .pagination');
+  if (paginationContainer) paginationContainer.style.display = 'flex';
+
+  tableBody.innerHTML = pageData.map(trx => {
+    // Bug #45 - statusMap missing defensive check
+    // Bug #214 - 未知状态使用 'pending' class（不是 'status-pending'）
+    const statusInfo = statusMap[trx.status] || { text: '未知', class: 'pending' };
+    return `
+    <tr>
+      <td><code>${escapeHtml(trx.id)}</code></td>
+      <td>${escapeHtml(trx.customer)}</td>
+      <td>${escapeHtml(trx.product)}</td>
+      <td>¥${trx.amount.toLocaleString()}</td>
+      <td>
+        <span class="status-badge ${statusInfo.class}">
+          <span class="status-dot-small"></span>
+          ${statusInfo.text}
+        </span>
+      </td>
+      <td>${escapeHtml(trx.time)}</td>
+      <td>
+        <button class="btn-icon table-action-btn" data-trx-id="${escapeHtml(trx.id)}" style="width: 32px; height: 32px;" aria-label="更多操作">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="1"/>
+            <circle cx="19" cy="12" r="1"/>
+            <circle cx="5" cy="12" r="1"/>
+          </svg>
+        </button>
+      </td>
+    </tr>
+  `;
+  }).join('');
+
+  // 更新页码信息
+  const pageInfo = document.querySelector('#overview .page-info');
+  if (pageInfo) {
+    const total = filteredTransactions.length;
+    const showStart = total > 0 ? startIndex + 1 : 0;
+    const showEnd = Math.min(endIndex, total);
+    pageInfo.textContent = `显示 ${showStart}-${showEnd} 共 ${total} 条`;
+  }
+
+  // Bug #47 - No longer rebinds on every render; event delegation handles it
+}
+
+// ==================== 搜索功能 ====================
+
+/**
+ * 初始化搜索框实时过滤
+ * Bug #32, #89, #97 - 添加防抖和特殊字符转义
+ */
+function initSearch() {
+  DVLogger.init('initSearch');
+  const searchInput = document.querySelector('#overview .search-box input');
+  if (!searchInput) return;
+
+  searchInput.addEventListener('input', (e) => {
+    // Bug #89 - 使用命名空间管理防抖定时器
+    if (DataVision.searchDebounceTimer) clearTimeout(DataVision.searchDebounceTimer);
+    DataVision.searchDebounceTimer = setTimeout(() => {
+      DVLogger.timer('setTimeout', 'searchDebounce');
+      // Bug #97 - 处理特殊字符，防止正则注入
+      currentSearchQuery = escapeSearchQuery(e.target.value.trim());
+      DVLogger.state('currentSearchQuery', currentSearchQuery);
+      applyFilters();
+    }, 300);
+  });
+}
+
+/**
+ * Bug #97 - 转义搜索查询中的正则特殊字符
+ */
+function escapeSearchQuery(query) {
+  DVLogger.init('escapeSearchQuery');
+  if (!query) return '';
+  // 转义正则特殊字符，但保留用户想搜索的字符
+  return query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ==================== 分页功能 ====================
+
+/**
+ * 初始化分页按钮事件
+ * Bug #90, #102 - 修复分页焦点恢复和状态保持
+ */
+function initPagination() {
+  DVLogger.init('initPagination');
+  const paginationContainer = document.querySelector('.pagination');
+  if (!paginationContainer) return;
+
+  paginationContainer.addEventListener('click', (e) => {
+    const btn = e.target.closest('.btn-page');
+    if (!btn || btn.disabled) return;
+
+    const text = btn.textContent.trim();
+    let pageChanged = false;
+    let targetPage = currentPage;
+
+    // Bug #204 - 使用 data-direction 属性代替 SVG 匹配来识别分页方向
+    const direction = btn.dataset.direction;
+    if (direction === 'prev') {
+      DVLogger.branch('pagination_prev', currentPage);
+      if (currentPage > 1) {
+        targetPage = currentPage - 1;
+        pageChanged = true;
+      }
+    }
+    // 下一页
+    else if (direction === 'next') {
+      DVLogger.branch('pagination_next', currentPage);
+      const totalPages = Math.ceil(filteredTransactions.length / pageSize);
+      if (currentPage < totalPages) {
+        targetPage = currentPage + 1;
+        pageChanged = true;
+      }
+    }
+    // 页码按钮
+    else {
+      const pageNum = parseInt(text);
+      DVLogger.branch('pagination_number', pageNum);
+      if (!isNaN(pageNum) && pageNum !== currentPage) {
+        targetPage = pageNum;
+        pageChanged = true;
+      }
+    }
+
+    // Bug #102 - 只有页面真正改变时才重新渲染
+    if (pageChanged) {
+      currentPage = targetPage;
+      DVLogger.state('currentPage', currentPage);
+      // Bug #88 - 保存页码到sessionStorage
+      try {
+        sessionStorage.setItem('dv_currentPage', currentPage);
+      } catch (e) { /* ignore */ }
+      renderTable();
+      renderPagination();
+      
+      // Bug #90 - 分页后恢复焦点到当前页按钮
+      requestAnimationFrame(() => {
+        const activeBtn = paginationContainer.querySelector('.btn-page.active');
+        if (activeBtn) {
+          activeBtn.focus();
+          // Bug #177 - 修正选择器 .table-container → .table-card
+          const tableContainer = document.querySelector('#overview .table-card');
+          if (tableContainer) {
+            tableContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        }
+      });
+    }
+  });
+}
+
+/**
+ * 渲染分页按钮
+ */
+function renderPagination() {
+  DVLogger.init('renderPagination');
+  const paginationContainer = document.querySelector('.pagination');
+  if (!paginationContainer) return;
+
+  const totalPages = Math.ceil(filteredTransactions.length / pageSize);
+  if (totalPages <= 0) return;
+
+  let html = '';
+
+  // 上一页按钮
+  // Bug #204 - 添加 data-direction 属性
+  html += `<button class="btn-page" data-direction="prev" ${currentPage === 1 ? 'disabled' : ''} aria-label="上一页">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="15 18 9 12 15 6"/>
+    </svg>
+  </button>`;
+
+  // 计算显示的页码范围
+  const pages = generatePageNumbers(currentPage, totalPages);
+  pages.forEach(p => {
+    if (p === '...') {
+      html += '<span class="page-ellipsis">...</span>';
+    } else {
+      html += `<button class="btn-page ${p === currentPage ? 'active' : ''}" aria-label="第${p}页">${p}</button>`;
+    }
+  });
+
+  // 下一页按钮
+  // Bug #204 - 添加 data-direction 属性
+  html += `<button class="btn-page" data-direction="next" ${currentPage === totalPages ? 'disabled' : ''} aria-label="下一页">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="9 18 15 12 9 6"/>
+    </svg>
+  </button>`;
+
+  paginationContainer.innerHTML = html;
+
+  // Bug #117 - 不在renderPagination中自动focus，由调用方决定是否focus
+  // focus逻辑统一在initPagination的click handler中处理
+}
+
+/**
+ * 生成页码数组（包含省略号）
+ */
+function generatePageNumbers(current, total) {
+  DVLogger.init('generatePageNumbers');
+  // Bug #143 - 阈值从7调整为9，提供更平滑的分页过渡
+  if (total <= 9) {
+    DVLogger.boundary('total_small', total);
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+
+  const pages = [];
+  pages.push(1);
+
+  if (current > 3) {
+    DVLogger.boundary('ellipsis_left', current);
+    pages.push('...');
+  }
+
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+
+  for (let i = start; i <= end; i++) {
+    pages.push(i);
+  }
+
+  if (current < total - 2) {
+    DVLogger.boundary('ellipsis_right', current);
+    pages.push('...');
+  }
+
+  pages.push(total);
+
+  return pages;
+}
+
+// ==================== 日期范围切换 ====================
+
+/**
+ * 初始化日期范围按钮切换
+ * Bug #41/#64 - Time range now updates charts and trend percentages
+ * Bug #42 - Trend percentages update with time range
+ */
+function initDateRange() {
+  DVLogger.init('initDateRange');
+  const rangeButtons = document.querySelectorAll('.btn-range');
+  if (rangeButtons.length === 0) return;
+
+  // 不同时间范围的模拟数据
+  const rangeData = {
+    '今日': { revenue: 2847500, users: 45231, orders: 1825, conversion: 3.24 },
+    '本周': { revenue: 18925000, users: 312450, orders: 12850, conversion: 3.18 },
+    '本月': { revenue: 76450000, users: 1285000, orders: 54200, conversion: 3.42 },
+    '全年': { revenue: 284750000, users: 5420000, orders: 218000, conversion: 3.56 }
+  };
+
+  // Bug #42 - Trend percentages for each time range
+  const trendData = {
+    '今日': ['+12.5%', '+8.2%', '+5.1%', '+0.3%'],
+    '本周': ['+15.3%', '+10.5%', '+7.8%', '+0.5%'],
+    '本月': ['+18.7%', '+12.1%', '+9.4%', '+0.8%'],
+    '全年': ['+21.2%', '+15.6%', '+11.2%', '+1.2%']
+  };
+
+  // Bug #41/#64 - Chart data for each time range
+  const chartDataByRange = {
+    '今日': {
+      revenue: [180000, 210000, 195000, 240000, 220000, 260000, 280000, 250000, 290000, 310000, 270000, 284750],
+      revenuePrev: [150000, 170000, 160000, 190000, 180000, 210000, 220000, 200000, 230000, 240000, 220000, 235000],
+      labels: ['1时', '2时', '3时', '4时', '5时', '6时', '7时', '8时', '9时', '10时', '11时', '12时']
+    },
+    '本周': {
+      revenue: [2200000, 2500000, 2800000, 2600000, 3100000, 2900000, 2847500],
+      revenuePrev: [1900000, 2100000, 2400000, 2200000, 2700000, 2500000, 2350000],
+      labels: ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+    },
+    '本月': {
+      revenue: [1800000, 2100000, 1950000, 2400000, 2200000, 2600000, 2800000, 2500000, 2900000, 3100000, 2700000, 2847500],
+      revenuePrev: [1500000, 1700000, 1600000, 1900000, 1800000, 2100000, 2200000, 2000000, 2300000, 2400000, 2200000, 2350000],
+      labels: ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
+    },
+    '全年': {
+      revenue: [18000000, 21000000, 19500000, 24000000, 22000000, 26000000, 28000000, 25000000, 29000000, 31000000, 27000000, 28475000],
+      revenuePrev: [15000000, 17000000, 16000000, 19000000, 18000000, 21000000, 22000000, 20000000, 23000000, 24000000, 22000000, 23500000],
+      labels: ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
+    }
+  };
+
+  rangeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      // 切换 active 样式
+      rangeButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      // 根据选择的时间范围更新指标数据
+      const range = btn.textContent.trim();
+      DVLogger.branch('dateRange_selected', range);
+      const data = rangeData[range];
+      if (!data) return;
+
+      // 更新指标卡片的 data-target 和显示值
+      const metricCards = document.querySelectorAll('.metric-value[data-target]');
+      const targets = [data.revenue, data.users, data.orders, data.conversion];
+      const prefixes = ['¥', '', '', ''];
+      const suffixes = ['', '', '', '%'];
+
+      metricCards.forEach((card, index) => {
+        if (index < targets.length) {
+          card.dataset.target = targets[index];
+          card.dataset.prefix = prefixes[index];
+          card.dataset.suffix = suffixes[index];
+
+          // 重新播放数字动画
+          animateCounter(card, targets[index], prefixes[index], suffixes[index]);
+        }
+      });
+
+      // Bug #42 - Update trend percentages
+      const trends = trendData[range];
+      if (trends) {
+        const trendElements = document.querySelectorAll('.metric-trend');
+        trendElements.forEach((el, index) => {
+          if (index < trends.length) {
+            const trendText = el.querySelector('span') || el;
+            // Keep the SVG icon, update the text node
+            const svgEl = el.querySelector('svg');
+            if (svgEl) {
+              // Remove old text nodes after SVG
+              while (el.lastChild && el.lastChild !== svgEl) {
+                el.removeChild(el.lastChild);
+              }
+              // Remove text nodes before SVG
+              while (el.firstChild && el.firstChild !== svgEl) {
+                el.removeChild(el.firstChild);
+              }
+              el.appendChild(document.createTextNode(trends[index]));
+            }
+          }
+        });
+      }
+
+      // Bug #41/#64 - Update chart data for the selected time range
+      const chartRangeData = chartDataByRange[range];
+      if (chartRangeData) {
+        // Update revenue chart
+        const revenueChart = chartInstances.find(c => c.canvas && c.canvas.id === 'revenueChart');
+        if (revenueChart) {
+          revenueChart.data.labels = chartRangeData.labels;
+          revenueChart.data.datasets[0].data = chartRangeData.revenue;
+          revenueChart.data.datasets[1].data = chartRangeData.revenuePrev;
+          // Bug #150 - 先用 'none' 模式取消进行中的动画，再正常更新
+          revenueChart.update('none');
+        }
+      }
+    });
+  });
+}
+
+/**
+ * 对单个计数器执行数字动画
+ * Bug #62 - animateCounter now cancellable: stores animationFrame ID on element
+ * Bug #92 - 处理极端数值格式化
+ */
+function animateCounter(element, target, prefix, suffix) {
+  DVLogger.init('animateCounter');
+  // Bug #62 - Cancel previous animation if any
+  if (element._counterAnimFrame) {
+    cancelAnimationFrame(element._counterAnimFrame);
+  }
+  // Bug #236 - 设置动画中标志，防止 IO 重复触发
+  element._counterAnimating = true;
+
+  const duration = 1000;
+  const startTime = performance.now();
+  // Bug #136 - 使用存储的实际数值作为起始值，而非解析格式化文本
+  const startValue = element._currentValue || 0;
+
+  // Bug #92 - 格式化数值，处理极端值
+  function formatNumber(num, isFinal = false) {
+    if (!isFinite(num)) return '0';
+    // 处理极大值（超过1万亿）
+    if (Math.abs(num) >= 1e12) {
+      DVLogger.boundary('num_extreme', num);
+      return (num / 1e12).toFixed(isFinal ? 2 : 1) + 'T';
+    }
+    // 处理大值（超过1亿）
+    if (Math.abs(num) >= 1e8) {
+      DVLogger.boundary('num_large', num);
+      return (num / 1e8).toFixed(isFinal ? 2 : 1) + '亿';
+    }
+    // 处理较大值（超过1万）
+    if (Math.abs(num) >= 1e4) {
+      DVLogger.boundary('num_medium', num);
+      // Bug #137 - 最终值使用 Math.round 保证精度，中间值使用 toFixed(1)
+      return isFinal
+        ? (Math.round(num / 1e4 * 10) / 10) + '万'
+        : (num / 1e4).toFixed(0) + '万';
+    }
+    // 处理小数
+    if (target % 1 !== 0) {
+      DVLogger.boundary('num_decimal', num);
+      return num.toFixed(2);
+    }
+    // 普通整数
+    DVLogger.boundary('num_integer', num);
+    return Math.floor(num).toLocaleString();
+  }
+
+  function update(currentTime) {
+    const elapsed = currentTime - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const easeProgress = 1 - Math.pow(1 - progress, 3);
+    const current = startValue + (target - startValue) * easeProgress;
+
+    const isFinal = progress >= 1;
+    element.textContent = prefix + formatNumber(current, isFinal) + suffix;
+
+    if (progress < 1) {
+      element._counterAnimFrame = requestAnimationFrame(update);
+    } else {
+      element._counterAnimFrame = null;
+      // Bug #4 - Mark counter as animated when complete
+      element._counterAnimated = true;
+      // Bug #136 - 存储实际数值，供下次动画使用
+      element._currentValue = target;
+      // Bug #236 - 清除动画中标志
+      element._counterAnimating = false;
+    }
+  }
+
+  element._counterAnimFrame = requestAnimationFrame(update);
+}
+
+// ==================== 导出报表按钮 ====================
+
+/**
+ * 初始化导出报表按钮
+ * Bug #40 - Implement actual CSV export
+ * Bug #38 - Also bind analysis page export button
+ */
+function initExportButton() {
+  DVLogger.init('initExportButton');
+  // Bind both overview and analytics export buttons
+  // Bug #11 - Note: selector '#overview .btn-primary, #analytics .btn-primary' is intentionally broad.
+  // This works because currently only the export buttons use .btn-primary in these sections.
+  // If additional .btn-primary buttons are added, consider using a more specific selector
+  // such as [data-action="export"] or .btn-export class for better targeting.
+  const exportBtns = document.querySelectorAll('#overview .btn-primary, #analytics .btn-primary');
+  exportBtns.forEach(exportBtn => {
+    exportBtn.addEventListener('click', () => {
+      // Bug #120 - 防止重复点击导出
+      if (DataVision.exportInProgress) {
+        DVLogger.branch('exportInProgress_lock', true);
+        showToast('导出正在进行中，请稍候', 'warning');
+        return;
+      }
+      const statusTextMap = { completed: '已完成', pending: '处理中', failed: '失败' };
+      const headers = ['交易ID', '客户', '产品', '金额', '状态', '时间'];
+
+      // Bug #101 - 大数据量分块处理，避免阻塞UI
+      const CHUNK_SIZE = 1000; // 每批处理1000条
+      // Bug #130 - 导出时对 filteredTransactions 做快照，防止导出过程中数据被修改
+      const exportData = [...filteredTransactions];
+      const totalRows = exportData.length;
+
+      // Bug #120 - 设置导出锁
+      DataVision.exportInProgress = true;
+      DVLogger.state('exportInProgress', true);
+
+      if (totalRows === 0) {
+        DVLogger.branch('totalRows_zero', true);
+        DataVision.exportInProgress = false;
+        DVLogger.state('exportInProgress', false);
+        showToast('没有可导出的数据', 'warning');
+        return;
+      }
+      
+      // 显示导出进度
+      showToast(`正在导出 ${totalRows} 条数据...`, 'info');
+      
+      // 使用 requestIdleCallback 或 setTimeout 分块处理
+      const processChunk = (startIdx) => {
+        const endIdx = Math.min(startIdx + CHUNK_SIZE, totalRows);
+        const csvRows = [];
+        
+        for (let i = startIdx; i < endIdx; i++) {
+          const trx = exportData[i];
+          const row = [
+            trx.id,
+            trx.customer,
+            trx.product,
+            trx.amount,
+            statusTextMap[trx.status] || trx.status,
+            trx.time
+          ].map(field => {
+            // Bug #208 - 正确处理包含换行符和逗号的字段值
+            const str = String(field).replace(/"/g, '""');
+            return `"${str}"`;
+          });
+          csvRows.push(row.join(','));
+        }
+        
+        return csvRows;
+      };
+      
+      // 同步处理（小数据量）或分块处理（大数据量）
+      if (totalRows <= CHUNK_SIZE) {
+        DVLogger.branch('CHUNK_SIZE_sync', totalRows);
+        try {
+          const csvRows = [headers.map(h => `"${h}"`).join(',')];
+          csvRows.push(...processChunk(0));
+
+          const csvContent = '\uFEFF' + csvRows.join('\n'); // BOM for Chinese characters
+          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `交易数据导出_${new Date().toISOString().slice(0,10)}.csv`;
+          // Bug #188 - Safari 兼容：先添加到 DOM 再触发点击
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          // Bug #199 - 延长 revokeObjectURL 超时到 60s
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+          showToast('报表导出成功', 'success');
+        } catch (e) {
+          console.error('导出失败:', e);
+          showToast('导出失败，请重试', 'error');
+        }
+        DataVision.exportInProgress = false;
+        DVLogger.state('exportInProgress', false);
+      } else {
+        // 大数据量使用分块处理
+        const csvRows = [headers.join(',')];
+        let processedCount = 0;
+
+        const processNextChunk = () => {
+          try {
+            const chunk = processChunk(processedCount);
+            csvRows.push(...chunk);
+            processedCount += chunk.length;
+
+            if (processedCount < totalRows) {
+              // 继续处理下一块
+              setTimeout(processNextChunk, 0);
+            } else {
+              // 全部处理完成，触发下载
+              try {
+                const csvContent = '\uFEFF' + csvRows.join('\n');
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `交易数据导出_${new Date().toISOString().slice(0,10)}.csv`;
+                // Bug #188 - Safari 兼容：先添加到 DOM 再触发点击
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                // Bug #199 - 延长 revokeObjectURL 超时到 60s
+                setTimeout(() => URL.revokeObjectURL(url), 60000);
+                showToast(`成功导出 ${totalRows} 条数据`, 'success');
+                DataVision.exportInProgress = false;
+                DVLogger.state('exportInProgress', false);
+              } catch (e) {
+                console.error('导出失败:', e);
+                showToast('导出失败，请重试', 'error');
+                DataVision.exportInProgress = false;
+                DVLogger.state('exportInProgress', false);
+              }
+            }
+          } catch (e) {
+            // Bug #173 - try-catch 包裹整个 processNextChunk 体
+            console.error('导出处理失败:', e);
+            showToast('导出过程中发生错误', 'error');
+            DataVision.exportInProgress = false;
+            DVLogger.state('exportInProgress', false);
+          }
+        };
+
+        processNextChunk();
+      }
+    });
+  });
+}
+
+// ==================== 筛选面板 ====================
+
+/**
+ * 初始化筛选按钮和筛选面板
+ * Bug #49 - Changed to position: fixed + document.body.appendChild + getBoundingClientRect()
+ */
+function initFilterPanel() {
+  DVLogger.init('initFilterPanel');
+  const filterBtn = document.querySelector('#overview .table-actions .btn-secondary');
+  if (!filterBtn) return;
+
+  // Bug #140 - 防止重复创建筛选面板
+  const existingPanel = document.querySelector('.filter-panel');
+  if (existingPanel) existingPanel.remove();
+
+  // 创建筛选面板
+  const filterPanel = document.createElement('div');
+  filterPanel.className = 'filter-panel';
+  filterPanel.style.cssText = `
+    position:fixed;
+    background:var(--bg-primary);border:1px solid var(--border);
+    border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,0.15);
+    padding:8px;min-width:160px;z-index:50;
+    display:none;
+  `;
+  filterPanel.innerHTML = `
+    <div class="filter-option" data-status="all" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--text-primary);transition:background 0.15s;">全部</div>
+    <div class="filter-option" data-status="completed" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--text-primary);transition:background 0.15s;">已完成</div>
+    <div class="filter-option" data-status="pending" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--text-primary);transition:background 0.15s;">处理中</div>
+    <div class="filter-option" data-status="failed" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--text-primary);transition:background 0.15s;">失败</div>
+  `;
+
+  // Bug #49 - Append to body and use fixed positioning
+  document.body.appendChild(filterPanel);
+
+  // 点击筛选按钮切换面板显示
+  filterBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAllPanels();
+    const isVisible = filterPanel.style.display === 'block';
+    if (!isVisible) {
+      const rect = filterBtn.getBoundingClientRect();
+      filterPanel.style.top = (rect.bottom + 8) + 'px';
+      filterPanel.style.left = rect.left + 'px';
+      filterPanel.style.display = 'block';
+
+      // Bug #7 - Add resize listener to update filter panel position
+      // Bug #155 - 先移除旧的 resize 监听器再添加新的
+      if (DataVision.handlers.filterResize) {
+        window.removeEventListener('resize', DataVision.handlers.filterResize);
+      }
+      DataVision.handlers.filterResize = () => {
+        if (filterPanel.style.display === 'block') {
+          const r = filterBtn.getBoundingClientRect();
+          filterPanel.style.top = (r.bottom + 8) + 'px';
+          filterPanel.style.left = r.left + 'px';
+        }
+      };
+      window.addEventListener('resize', DataVision.handlers.filterResize);
+    } else {
+      filterPanel.style.display = 'none';
+    }
+  });
+
+  // 筛选选项点击事件
+  filterPanel.querySelectorAll('.filter-option').forEach(option => {
+    // 悬停效果
+    option.addEventListener('mouseenter', () => {
+      option.style.background = 'var(--bg-secondary)';
+    });
+    option.addEventListener('mouseleave', () => {
+      option.style.background = 'transparent';
+    });
+
+    option.addEventListener('click', () => {
+      currentStatusFilter = option.dataset.status;
+      DVLogger.state('currentStatusFilter', currentStatusFilter);
+
+      // Bug #230 - 使用 textContent 会清除所有子元素，但此处 filterBtn 只有文本，安全
+      // 如果 filterBtn 包含图标等子元素，应改为只修改文本节点
+      const statusTextMap = { all: '筛选', completed: '筛选: 已完成', pending: '筛选: 处理中', failed: '筛选: 失败' };
+      filterBtn.textContent = statusTextMap[currentStatusFilter];
+
+      // 关闭面板
+      filterPanel.style.display = 'none';
+
+      // 重新过滤表格
+      applyFilters();
+    });
+  });
+}
+
+// ==================== 表格操作按钮（下拉菜单） ====================
+
+/**
+ * 初始化表格操作按钮（事件委托）
+ * Bug #47 - Single click listener on tbody
+ * Bug #50 - Action dropdown uses position: fixed + getBoundingClientRect()
+ * Bug #35 - XSS in action dropdown trxId
+ * Bug #53 - Transaction delete actually removes from allTransactions
+ */
+function initTableActions() {
+  DVLogger.init('initTableActions');
+  const tableBody = document.getElementById('transactionTable');
+  if (!tableBody) return;
+
+  // Bug #47 - Event delegation: single click listener on tbody
+  tableBody.addEventListener('click', (e) => {
+    const btn = e.target.closest('.table-action-btn');
+    if (!btn) return;
+
+    e.stopPropagation();
+    const trxId = btn.dataset.trxId;
+
+    // Toggle: if this row already has a dropdown, close it
+    const existingDropdown = btn.closest('td').querySelector('.action-dropdown');
+    if (existingDropdown) {
+      existingDropdown.remove();
+      return;
+    }
+
+    // 关闭已打开的其他菜单
+    closeAllDropdowns();
+
+    // 创建下拉菜单
+    const dropdown = document.createElement('div');
+    dropdown.className = 'action-dropdown';
+    // Bug #50 - Use position: fixed
+    dropdown.style.cssText = `
+      position:fixed;
+      background:var(--bg-primary);border:1px solid var(--border);
+      border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,0.15);
+      padding:4px;min-width:140px;z-index:50;
+    `;
+    // Bug #35 - Escape trxId in innerHTML
+    const escapedTrxId = escapeHtml(trxId);
+    dropdown.innerHTML = `
+      <div class="action-item" data-action="view" data-trx-id="${escapedTrxId}" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--text-primary);display:flex;align-items:center;gap:8px;transition:background 0.15s;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        查看详情
+      </div>
+      <div class="action-item" data-action="edit" data-trx-id="${escapedTrxId}" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--text-primary);display:flex;align-items:center;gap:8px;transition:background 0.15s;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        编辑
+      </div>
+      <div class="action-item" data-action="delete" data-trx-id="${escapedTrxId}" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px;color:#ef4444;display:flex;align-items:center;gap:8px;transition:background 0.15s;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        删除
+      </div>
+    `;
+
+    // Bug #50 - Position using getBoundingClientRect, handle viewport overflow
+    const btnRect = btn.getBoundingClientRect();
+    let top = btnRect.bottom + 4;
+    let left = btnRect.right - 140; // align to right of button
+
+    // Prevent overflow at bottom
+    const dropdownHeight = 130;
+    if (top + dropdownHeight > window.innerHeight) {
+      top = btnRect.top - dropdownHeight - 4;
+    }
+    // Prevent overflow at left
+    if (left < 8) {
+      left = 8;
+    }
+    // Prevent overflow at right
+    if (left + 140 > window.innerWidth) {
+      left = window.innerWidth - 148;
+    }
+
+    dropdown.style.top = top + 'px';
+    dropdown.style.left = left + 'px';
+
+    document.body.appendChild(dropdown);
+
+    // 悬停效果
+    dropdown.querySelectorAll('.action-item').forEach(item => {
+      item.addEventListener('mouseenter', () => {
+        item.style.background = 'var(--bg-secondary)';
+      });
+      item.addEventListener('mouseleave', () => {
+        item.style.background = 'transparent';
+      });
+
+      item.addEventListener('click', () => {
+        const action = item.dataset.action;
+        const id = item.dataset.trxId;
+
+        if (action === 'view') {
+          showToast(`正在查看交易 ${id} 的详情`, 'info');
+        } else if (action === 'edit') {
+          showToast(`正在编辑交易 ${id}`, 'info');
+        } else if (action === 'delete') {
+          // Bug #219 - 导出进行中不允许删除，防止数据不一致
+          if (DataVision.exportInProgress) {
+            showToast('导出进行中，请稍后再删除', 'warning');
+            return;
+          }
+          // Bug #53 - Actually remove the transaction from allTransactions
+          const idx = allTransactions.findIndex(t => t.id === id);
+          if (idx !== -1) {
+            allTransactions.splice(idx, 1);
+            // Bug #121 - 删除后智能调整页码，不跳回第1页
+            applyFilters({ fromDelete: true });
+            showToast(`交易 ${id} 已删除`, 'warning');
+          }
+        }
+
+        closeAllDropdowns();
+      });
+    });
+  });
+}
+
+/**
+ * 关闭所有操作下拉菜单
+ */
+function closeAllDropdowns() {
+  DVLogger.init('closeAllDropdowns');
+  // Bug #226 - 添加 isConnected 检查，防止已移除的元素再次 remove 报错
+  document.querySelectorAll('.action-dropdown').forEach(d => {
+    if (d.isConnected) d.remove();
+  });
+}
+
+/**
+ * 关闭所有面板（下拉菜单、筛选面板、通知面板）
+ * Bug #20 - Note: This function uses display:none directly instead of CSS classes.
+ * This is a known design inconsistency. Changing to CSS classes would require
+ * significant refactoring of the notification panel animation, so it is left
+ * as-is for now. If a refactor is done, consider using a .panel-open class approach.
+ */
+function closeAllPanels() {
+  DVLogger.init('closeAllPanels');
+  closeAllDropdowns();
+  // Close filter panel
+  const filterPanel = document.querySelector('.filter-panel');
+  if (filterPanel) filterPanel.style.display = 'none';
+  // Bug #7 - Clean up filter panel resize listener
+  if (DataVision.handlers.filterResize) {
+    window.removeEventListener('resize', DataVision.handlers.filterResize);
+    DataVision.handlers.filterResize = null;
+  }
+  // Close notification panel
+  const notifPanel = document.querySelector('.notification-panel');
+  if (notifPanel) notifPanel.style.display = 'none';
+  // Bug #48 - Clean up resize listener when panel closes
+  if (DataVision.handlers.notifResize) {
+    window.removeEventListener('resize', DataVision.handlers.notifResize);
+    DataVision.handlers.notifResize = null;
+  }
+}
+
+// ==================== 通知面板 ====================
+
+/**
+ * 初始化通知按钮和通知面板
+ * Bug #48 - Resize listener to update notification panel position
+ * Bug #60 - "View all notifications" link handler
+ * Bug #34 - escapeHtml on dynamic parts (low risk but added)
+ */
+function initNotifications() {
+  DVLogger.init('initNotifications');
+  const notifBtn = document.getElementById('notifications');
+  if (!notifBtn) return;
+
+  // 创建通知面板
+  const notifPanel = document.createElement('div');
+  notifPanel.className = 'notification-panel';
+  notifPanel.style.cssText = `
+    position:fixed;margin-top:8px;
+    background:var(--bg-primary);border:1px solid var(--border);
+    border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,0.15);
+    width:340px;max-width:calc(100vw - 48px);z-index:200;display:none;overflow:hidden;
+  `;
+  notifPanel.innerHTML = `
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+      <span style="font-size:16px;font-weight:600;color:var(--text-primary);">通知</span>
+      <span style="font-size:12px;color:var(--primary);cursor:pointer;" id="markAllRead">全部已读</span>
+    </div>
+    <div style="max-height:320px;overflow-y:auto;">
+      <div class="notif-item" style="padding:14px 20px;border-bottom:1px solid var(--border-light);cursor:pointer;transition:background 0.15s;display:flex;gap:12px;align-items:flex-start;">
+        <div style="width:36px;height:36px;border-radius:50%;background:rgba(16,185,129,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:500;color:var(--text-primary);margin-bottom:2px;">订单 #TRX-2024-002 已完成支付</div>
+          <div style="font-size:12px;color:var(--text-tertiary);">5分钟前</div>
+        </div>
+      </div>
+      <div class="notif-item" style="padding:14px 20px;border-bottom:1px solid var(--border-light);cursor:pointer;transition:background 0.15s;display:flex;gap:12px;align-items:flex-start;">
+        <div style="width:36px;height:36px;border-radius:50%;background:rgba(245,158,11,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:500;color:var(--text-primary);margin-bottom:2px;">服务器负载超过 80% 阈值</div>
+          <div style="font-size:12px;color:var(--text-tertiary);">15分钟前</div>
+        </div>
+      </div>
+      <div class="notif-item" style="padding:14px 20px;cursor:pointer;transition:background 0.15s;display:flex;gap:12px;align-items:flex-start;">
+        <div style="width:36px;height:36px;border-radius:50%;background:rgba(239,68,68,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:500;color:var(--text-primary);margin-bottom:2px;">订单 #TRX-2024-005 支付失败</div>
+          <div style="font-size:12px;color:var(--text-tertiary);">30分钟前</div>
+        </div>
+      </div>
+    </div>
+    <div style="padding:12px;text-align:center;border-top:1px solid var(--border);">
+      <span id="viewAllNotifications" style="font-size:13px;color:var(--primary);cursor:pointer;">查看全部通知</span>
+    </div>
+  `;
+
+  // 设置按钮容器为相对定位
+  document.body.appendChild(notifPanel);
+
+  // 点击通知按钮切换面板
+  notifBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAllPanels();
+    const isVisible = notifPanel.style.display === 'block';
+    if (!isVisible) {
+      const rect = notifBtn.getBoundingClientRect();
+      notifPanel.style.top = (rect.bottom + 8) + 'px';
+      notifPanel.style.right = (window.innerWidth - rect.right) + 'px';
+      notifPanel.style.display = 'block';
+      const badge = notifBtn.querySelector('.badge');
+      if (badge) badge.style.display = 'none';
+
+      // Bug #48, #105 - Add resize listener to update position when visible
+      // Bug #156 - 先移除旧的 resize 监听器再添加新的
+      if (DataVision.handlers.notifResize) {
+        window.removeEventListener('resize', DataVision.handlers.notifResize);
+      }
+      DataVision.handlers.notifResize = () => {
+        if (notifPanel.style.display === 'block') {
+          const r = notifBtn.getBoundingClientRect();
+          notifPanel.style.top = (r.bottom + 8) + 'px';
+          notifPanel.style.right = (window.innerWidth - r.right) + 'px';
+        }
+      };
+      window.addEventListener('resize', DataVision.handlers.notifResize);
+    } else {
+      notifPanel.style.display = 'none';
+    }
+  });
+
+  // 通知项悬停效果
+  notifPanel.querySelectorAll('.notif-item').forEach(item => {
+    item.addEventListener('mouseenter', () => {
+      item.style.background = 'var(--bg-secondary)';
+    });
+    item.addEventListener('mouseleave', () => {
+      item.style.background = 'transparent';
+    });
+  });
+
+  // 全部已读
+  const markAllRead = document.getElementById('markAllRead');
+  if (markAllRead) {
+    markAllRead.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showToast('所有通知已标记为已读', 'success');
+    });
+  }
+
+  // Bug #60 - "View all notifications" link handler
+  const viewAllNotifs = document.getElementById('viewAllNotifications');
+  if (viewAllNotifs) {
+    viewAllNotifs.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showToast('通知中心功能开发中', 'info');
+    });
+  }
+}
+
+// ==================== 日志系统 ====================
+
+/**
+ * 初始化日志区域
+ * Bug #33 - XSS in log messages: wrap with escapeHtml()
+ * Bug #63 - Log level detection uses data-level attribute instead of classList[1]
+ */
+function initLogs() {
+  DVLogger.init('initLogs');
+  const logContent = document.getElementById('logContent');
+  if (!logContent) return;
+
+  const logs = [
+    { level: 'info', time: '10:42:15', message: '系统启动成功，所有服务正常运行' },
+    { level: 'info', time: '10:41:32', message: '数据库连接池已初始化，当前连接数: 10' },
+    { level: 'warning', time: '10:40:18', message: 'API 响应时间超过阈值: 2.3s' },
+    { level: 'info', time: '10:39:45', message: '缓存清理任务执行完成，释放 128MB 内存' },
+    { level: 'error', time: '10:38:22', message: '订单服务异常: 连接超时' },
+    { level: 'info', time: '10:37:56', message: '用户登录成功: user_12345' },
+    { level: 'info', time: '10:36:41', message: '定时任务执行: 数据备份完成' },
+    { level: 'warning', time: '10:35:29', message: '磁盘使用率超过 80%: /var/log' }
+  ];
+
+  const levelMap = {
+    info: 'info',
+    warning: 'warning',
+    error: 'error'
+  };
+
+  // Bug #33 - escapeHtml on log.message
+  // Bug #63 - Add data-level attribute to log-level elements
+  logContent.innerHTML = logs.map(log => `
+    <div class="log-item">
+      <div class="log-level ${levelMap[log.level]}" data-level="${log.level}"></div>
+      <div class="log-time">${log.time}</div>
+      <div class="log-message">${escapeHtml(log.message)}</div>
+    </div>
+  `).join('');
+
+  // 日志过滤按钮
+  const filterBtns = document.querySelectorAll('.filter-btn');
+  filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      filterBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      const level = btn.dataset.level;
+      // Bug #44 - Track current filter level in module-level variable
+      currentLogLevel = level;
+      DVLogger.state('currentLogLevel', currentLogLevel);
+      const logItems = logContent.querySelectorAll('.log-item');
+
+      logItems.forEach(item => {
+        // Bug #63 - Use dataset.level instead of classList[1]
+        const itemLevel = item.querySelector('.log-level').dataset.level;
+        if (level === 'all' || itemLevel === level) {
+          item.style.display = 'flex';
+        } else {
+          item.style.display = 'none';
+        }
+      });
+    });
+  });
+}
+
+// ==================== 主题切换 ====================
+
+/**
+ * 初始化主题切换功能，并在切换时更新所有图表颜色
+ */
+function initThemeToggle() {
+  DVLogger.init('initThemeToggle');
+  const themeToggle = document.getElementById('themeToggle');
+  if (!themeToggle) return;
+
+  // Bug #9 - Wrap localStorage.getItem in try-catch
+  let savedTheme = 'light';
+  try {
+    savedTheme = localStorage.getItem('theme') || 'light';
+  } catch (e) {
+    // localStorage may be unavailable (private browsing, quota exceeded, etc.)
+  }
+  document.documentElement.setAttribute('data-theme', savedTheme);
+
+  themeToggle.addEventListener('click', () => {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+
+    document.documentElement.setAttribute('data-theme', newTheme);
+    // Bug #9 - Wrap localStorage.setItem in try-catch
+    try {
+      localStorage.setItem('theme', newTheme);
+    } catch (e) {
+      // localStorage may be unavailable
+    }
+
+    // Bug #142 - 使用 debounce 替代锁，确保快速双击时最终状态一致
+    if (DataVision.themeDebounceTimer) {
+      clearTimeout(DataVision.themeDebounceTimer);
+    }
+    DataVision.themeDebounceTimer = setTimeout(() => {
+      DVLogger.timer('setTimeout', 'themeDebounce');
+      updateChartsTheme();
+      DataVision.themeDebounceTimer = null;
+    }, 150);
+  });
+}
+
+/**
+ * 更新所有图表的主题颜色（深色/浅色模式适配）
+ * 使用 getComputedStyle 读取 CSS 变量值
+ * Bug #91 - 添加主题更新锁防止竞态条件
+ */
+function updateChartsTheme() {
+  DVLogger.init('updateChartsTheme');
+  // Bug #167 - 移除 themeUpdateLock，依赖 initThemeToggle 中的 debounce 机制
+  // 延迟一帧确保 CSS 变量已更新
+  requestAnimationFrame(() => {
+    const colors = getChartThemeColors();
+
+    DataVision.chartInstances.forEach(chart => {
+      if (!chart || !chart.options) return;
+      
+      // 更新图例文字颜色
+      if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+        chart.options.plugins.legend.labels.color = colors.textSecondary;
+      }
+
+      // 更新坐标轴颜色
+      if (chart.options.scales) {
+        Object.values(chart.options.scales).forEach(scale => {
+          if (scale.ticks) {
+            scale.ticks.color = colors.textTertiary;
+          }
+          if (scale.grid && scale.grid.color !== undefined) {
+            scale.grid.color = colors.border;
+          }
+        });
+      }
+
+      // 更新仪表盘背景色
+      if (chart.options.circumference === 180) {
+        const mainColor = chart.data.datasets[0].backgroundColor[0];
+        chart.data.datasets[0].backgroundColor = [mainColor, colors.border];
+      }
+
+      chart.update('none');
+    });
+  });
+}
+
+// ==================== 实时数据更新 ====================
+
+/**
+ * 模拟实时数据更新
+ * - 每5秒更新仪表盘数值（随机波动）
+ * - 每10秒添加新日志（限制最大50条，带入场动画）
+ * Bug #33, #86 - XSS防护和日志DOM节点管理
+ * Bug #44 - Real-time logs respect filter state
+ * Bug #46 - Removed redundant gauge backgroundColor reassignment
+ * Bug #63 - Add data-level attribute to new log items
+ * Bug #84, #85 - 使用命名空间管理定时器
+ */
+function simulateRealtimeUpdates() {
+  DVLogger.init('simulateRealtimeUpdates');
+  // 清理现有定时器
+  if (DataVision.intervals.gauge) { DVLogger.timer('clearInterval', 'gauge'); clearInterval(DataVision.intervals.gauge); }
+  if (DataVision.intervals.log) { DVLogger.timer('clearInterval', 'log'); clearInterval(DataVision.intervals.log); }
+
+  // Bug #141, #152 - 清理所有挂起的日志清理 setTimeout
+  DataVision.logCleanupTimers.forEach(timerId => clearTimeout(timerId));
+  DataVision.logCleanupTimers = [];
+
+  // 每5秒更新仪表盘数值
+  DVLogger.timer('setInterval', 'gauge');
+  DataVision.intervals.gauge = setInterval(() => {
+    // Bug #87 - 改进的均值回归算法
+    Object.keys(DataVision.gaugeCharts).forEach(id => {
+      const chart = DataVision.gaugeCharts[id];
+      if (!chart || !chart.data || !chart.data.datasets) return;
+
+      const currentValue = chart.data.datasets[0].data[0];
+      // Bug #87 - 改进的均值回归算法：使用更平滑的回归和更合理的波动
+      const initialValue = chart._initialGaugeValue || 50;
+      // 向初始值回归的力度
+      const regressionStrength = 0.1;
+      const drift = (initialValue - currentValue) * regressionStrength;
+      // 随机波动范围减小，使数据更稳定
+      const randomFluctuation = (Math.random() - 0.5) * 5;
+      let newValue = currentValue + drift + randomFluctuation;
+      // 限制在 5-95 之间
+      newValue = Math.max(5, Math.min(95, newValue));
+      newValue = Math.round(newValue);
+
+      chart.data.datasets[0].data = [newValue, 100 - newValue];
+      chart.update('none');
+
+      // 更新仪表盘文字
+      const gaugeCard = chart.canvas.closest('.gauge-card');
+      if (gaugeCard) {
+        const gaugeValueEl = gaugeCard.querySelector('.gauge-value');
+        if (gaugeValueEl) {
+          if (id === 'networkGauge') {
+            // 网络流量显示为 GB/s
+            const gbValue = (newValue / 100 * 5).toFixed(1);
+            gaugeValueEl.textContent = gbValue + 'GB/s';
+          } else {
+            gaugeValueEl.textContent = newValue + '%';
+          }
+        }
+      }
+    });
+  }, 5000);
+
+  // 每10秒添加新日志
+  DataVision.intervals.log = setInterval(() => {
+    DVLogger.timer('setInterval', 'log');
+    const logContent = document.getElementById('logContent');
+    if (!logContent) return;
+
+    const messages = [
+      { level: 'info', message: '用户访问首页' },
+      { level: 'info', message: '订单创建成功' },
+      { level: 'info', message: '数据同步完成' },
+      { level: 'info', message: '缓存命中: 95%' },
+      { level: 'info', message: 'API 请求: 200ms' },
+      { level: 'warning', message: '内存使用率偏高: 85%' },
+      { level: 'error', message: '第三方服务响应超时' },
+      { level: 'info', message: '定时任务执行完成' },
+      { level: 'warning', message: '请求队列积压: 150' },
+      { level: 'info', message: '数据库查询优化完成' }
+    ];
+
+    const now = new Date();
+    const time = now.toTimeString().split(' ')[0];
+    const randomMsg = messages[Math.floor(Math.random() * messages.length)];
+
+    const logItem = document.createElement('div');
+    logItem.className = 'log-item';
+    logItem.style.cssText = 'opacity:0;transform:translateY(-10px);transition:opacity 0.3s ease,transform 0.3s ease;';
+    // Bug #33 - escapeHtml on randomMsg.message
+    // Bug #63 - Add data-level attribute
+    logItem.innerHTML = `
+      <div class="log-level ${randomMsg.level}" data-level="${randomMsg.level}"></div>
+      <div class="log-time">${time}</div>
+      <div class="log-message">${escapeHtml(randomMsg.message)}</div>
+    `;
+
+    // Bug #44 - Check current active filter level; hide if doesn't match
+    if (currentLogLevel !== 'all' && randomMsg.level !== currentLogLevel) {
+      logItem.style.display = 'none';
+    }
+
+    logContent.insertBefore(logItem, logContent.firstChild);
+
+    // 入场动画
+    requestAnimationFrame(() => {
+      logItem.style.opacity = '1';
+      logItem.style.transform = 'translateY(0)';
+    });
+
+    // Bug #86 - 限制日志最大30条（从50减少到30），更积极清理
+    const maxLogs = 30;
+    while (logContent.children.length > maxLogs) {
+      const oldChild = logContent.lastChild;
+      if (oldChild) {
+        // 先淡出再移除，避免DOM操作卡顿
+        oldChild.style.opacity = '0';
+        // Bug #141, #152 - 跟踪 setTimeout ID 以便后续清理
+        const cleanupTimer = setTimeout(() => {
+          DVLogger.timer('setTimeout', 'logCleanup');
+          if (oldChild.parentNode) oldChild.remove();
+          // Bug #157 - 执行后从数组中移除
+          const idx = DataVision.logCleanupTimers.indexOf(cleanupTimer);
+          if (idx !== -1) DataVision.logCleanupTimers.splice(idx, 1);
+        }, 300);
+        DataVision.logCleanupTimers.push(cleanupTimer);
+      }
+    }
+  }, 10000);
+}
+
+// ==================== 报表页面功能 ====================
+
+/**
+ * 初始化报表页面功能
+ * - 报表生成器表单提交
+ * - 报表列表的下载/预览/删除按钮
+ * Bug #36 - Report search not functional
+ * Bug #52 - Report delete has no confirmation
+ * Bug #37 - Report refresh button no function
+ */
+function initReportActions() {
+  DVLogger.init('initReportActions');
+  // 报表生成器 - 生成报表按钮
+  const generateBtn = document.getElementById('generateReportBtn');
+  if (generateBtn) {
+    generateBtn.addEventListener('click', () => {
+      const reportType = document.getElementById('reportType');
+      const reportDateRange = document.getElementById('reportDateRange');
+      const reportFormat = document.getElementById('reportFormat');
+
+      const typeText = reportType.options[reportType.selectedIndex].text;
+      const rangeText = reportDateRange.options[reportDateRange.selectedIndex].text;
+      const formatText = reportFormat.options[reportFormat.selectedIndex].text;
+
+      showToast(`${typeText}（${rangeText}）生成任务已提交，格式: ${formatText}`, 'success');
+    });
+  }
+
+  // 报表生成器 - 定时生成按钮
+  const scheduleBtn = document.getElementById('scheduleReportBtn');
+  if (scheduleBtn) {
+    scheduleBtn.addEventListener('click', () => {
+      showToast('定时生成任务已设置', 'success');
+    });
+  }
+
+  // Bug #37 - Report refresh button handler
+  const refreshBtn = document.querySelector('#reports .table-actions .btn-secondary');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      showToast('报表列表已刷新', 'success');
+    });
+  }
+
+  // Bug #36, #96, #97, #103 - Report search functionality with debounce and special char handling
+  const reportSearchInput = document.querySelector('#reports .search-box input');
+  if (reportSearchInput) {
+    reportSearchInput.addEventListener('input', (e) => {
+      // Bug #96 - 添加防抖
+      if (DataVision.reportSearchDebounceTimer) {
+        clearTimeout(DataVision.reportSearchDebounceTimer);
+      }
+      DataVision.reportSearchDebounceTimer = setTimeout(() => {
+        DVLogger.timer('setTimeout', 'reportSearchDebounce');
+        const rawQuery = e.target.value.trim();
+        // Bug #119 - 使用原始值进行includes匹配，移除无用的正则转义
+        const query = rawQuery.toLowerCase();
+        const reportTable = document.querySelector('#reports .data-table');
+        if (!reportTable) return;
+        const rows = reportTable.querySelectorAll('tbody tr');
+        let visibleCount = 0;
+        rows.forEach(row => {
+          const nameCell = row.querySelector('td');
+          if (nameCell) {
+            const name = nameCell.textContent.trim().toLowerCase();
+            const isMatch = !query || name.includes(query);
+            row.style.display = isMatch ? '' : 'none';
+            if (isMatch) visibleCount++;
+          }
+        });
+        // Bug #103 - 显示无结果提示
+        const tbody = reportTable.querySelector('tbody');
+        let noResultRow = tbody.querySelector('.no-results-row');
+        if (visibleCount === 0) {
+          if (!noResultRow) {
+            noResultRow = document.createElement('tr');
+            noResultRow.className = 'no-results-row';
+            const colCount = reportTable.querySelectorAll('thead th').length || 7;
+            noResultRow.innerHTML = `<td colspan="${colCount}" style="text-align:center;padding:48px 20px;color:var(--text-tertiary);">未找到匹配的报表</td>`;
+            tbody.appendChild(noResultRow);
+            DVLogger.branch('reportSearch_noResults', true);
+          }
+        } else if (noResultRow) {
+          noResultRow.remove();
+          DVLogger.branch('reportSearch_noResults', false);
+        }
+      }, 300);
+    });
+  }
+
+  // 报表列表操作按钮
+  const reportTable = document.querySelector('#reports .data-table');
+  if (reportTable) {
+    reportTable.addEventListener('click', (e) => {
+      const btn = e.target.closest('.btn-icon');
+      if (!btn) return;
+
+      // 找到所在行的报表名称
+      const row = btn.closest('tr');
+      const reportName = row ? row.querySelector('td')?.textContent.trim() : '报表';
+
+      // 判断按钮类型（通过 SVG 图标区分）
+      const svgPath = btn.querySelector('path')?.getAttribute('d') || '';
+
+      // 下载按钮：包含 "M21 15v4" 和 "M7 10 12 15 17 10"
+      if (svgPath.includes('M21 15v4') && svgPath.includes('M7 10')) {
+        showToast(`正在下载: ${reportName}`, 'success');
+      }
+      // 预览按钮：包含 "M1 12s4-8"
+      else if (svgPath.includes('M1 12s4-8')) {
+        showToast(`正在预览: ${reportName}`, 'info');
+      }
+      // 删除按钮：包含 "M19 6v14"
+      else if (svgPath.includes('M19 6v14') || svgPath.includes('M3 6 5 6 21 6')) {
+        // Bug #52 - Add confirmation before deleting
+        if (!window.confirm(`确定要删除报表 "${reportName}" 吗？`)) return;
+        // Bug #149 - 添加 row 空值检查
+        if (!row) return;
+        // 删除行（带淡出动画）
+        row.style.transition = 'opacity 0.3s, transform 0.3s';
+        row.style.opacity = '0';
+        row.style.transform = 'translateX(20px)';
+        setTimeout(() => {
+          row.remove();
+          showToast(`${reportName} 已删除`, 'warning');
+          // Bug #149 - 更新报表列表的 page-info 计数
+          const pageInfo = document.querySelector('#reports .page-info');
+          if (pageInfo) {
+            const tbody = reportTable.querySelector('tbody');
+            const remainingRows = tbody ? tbody.querySelectorAll('tr:not(.no-results-row)').length : 0;
+            pageInfo.textContent = `显示 ${remainingRows > 0 ? 1 : 0}-${remainingRows} 共 ${remainingRows} 条`;
+          }
+        }, 300);
+      }
+    });
+  }
+}
+
+// ==================== 杂项按钮功能 ====================
+
+/**
+ * 初始化杂项按钮功能
+ * Bug #39 - New A/B test button
+ * Bug #43 - Data source links
+ * Bug #55 - Chart refresh/settings buttons (overview)
+ * Bug #56 - Analysis chart refresh buttons
+ */
+function initMiscButtons() {
+  DVLogger.init('initMiscButtons');
+  // Bug #39 - New A/B test button
+  const newTestBtn = document.querySelector('#analytics .table-actions .btn-secondary');
+  if (newTestBtn) {
+    newTestBtn.addEventListener('click', () => {
+      showToast('新建测试功能开发中', 'info');
+    });
+  }
+
+  // Bug #43 - Data source links (sidebar links without # href)
+  const dataSourceLinks = document.querySelectorAll('.sidebar-section .sidebar-link:not([href^="#"])');
+  dataSourceLinks.forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      showToast('功能开发中', 'info');
+    });
+  });
+
+  // Bug #55 - Chart refresh and settings buttons on overview page
+  const overviewChartActions = document.querySelectorAll('#overview .chart-actions');
+  overviewChartActions.forEach(actionGroup => {
+    const buttons = actionGroup.querySelectorAll('.btn-icon');
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ariaLabel = btn.getAttribute('aria-label') || '';
+        if (ariaLabel.includes('刷新')) {
+          // Regenerate random data for the chart
+          const chartCard = btn.closest('.chart-card');
+          if (chartCard) {
+            const canvas = chartCard.querySelector('canvas');
+            if (canvas) {
+              const chart = chartInstances.find(c => c.canvas === canvas);
+              if (chart) {
+                // Bug #6 - Skip gauge charts (circumference === 180) to preserve sum=100
+                if (chart.options.circumference === 180) {
+                  showToast('仪表盘数据由系统实时更新', 'info');
+                  return;
+                }
+                chart.data.datasets.forEach(dataset => {
+                  if (Array.isArray(dataset.data)) {
+                    dataset.data = dataset.data.map(v => {
+                      if (typeof v === 'number') {
+                        const variation = v * (0.8 + Math.random() * 0.4);
+                        return Math.round(variation);
+                      }
+                      return v;
+                    });
+                    // Bug #239 - 漏斗图数据单调递减检查
+                    if (chart.config.type === 'bar' && chart.canvas.id === 'funnelChart') {
+                      let prev = dataset.data[0];
+                      for (let i = 1; i < dataset.data.length; i++) {
+                        if (dataset.data[i] > prev) {
+                          dataset.data[i] = Math.max(1, prev - Math.floor(Math.random() * prev * 0.2));
+                        }
+                        prev = dataset.data[i];
+                      }
+                    }
+                  }
+                });
+                chart.update();
+              }
+            }
+          }
+          showToast('图表数据已刷新', 'success');
+        } else if (ariaLabel.includes('设置')) {
+          showToast('图表设置功能开发中', 'info');
+        }
+      });
+    });
+  });
+
+      // Bug #56 - Analysis chart refresh buttons
+  const analyticsChartActions = document.querySelectorAll('#analytics .chart-actions');
+  analyticsChartActions.forEach(actionGroup => {
+    const buttons = actionGroup.querySelectorAll('.btn-icon');
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ariaLabel = btn.getAttribute('aria-label') || '';
+        if (ariaLabel.includes('刷新')) {
+          const chartCard = btn.closest('.chart-card');
+          if (chartCard) {
+            const canvas = chartCard.querySelector('canvas');
+            if (canvas) {
+              const chart = chartInstances.find(c => c.canvas === canvas);
+              if (chart) {
+                // Bug #6 - Skip gauge charts to preserve sum=100
+                if (chart.options.circumference === 180) {
+                  showToast('仪表盘数据由系统实时更新', 'info');
+                  return;
+                }
+                chart.data.datasets.forEach(dataset => {
+                  if (Array.isArray(dataset.data)) {
+                    dataset.data = dataset.data.map(v => {
+                      if (typeof v === 'number') {
+                        const variation = v * (0.8 + Math.random() * 0.4);
+                        return Math.round(variation);
+                      }
+                      return v;
+                    });
+                  }
+                });
+                // Bug #231 - 漏斗图数据必须单调递减
+                if (canvas.id === 'funnelChart' && chart.data.datasets[0]) {
+                  const funnelData = chart.data.datasets[0].data;
+                  for (let i = 1; i < funnelData.length; i++) {
+                    if (funnelData[i] > funnelData[i - 1]) {
+                      funnelData[i] = funnelData[i - 1];
+                    }
+                  }
+                }
+                chart.update();
+              }
+            }
+          }
+          showToast('图表数据已刷新', 'success');
+        }
+      });
+    });
+  });
+}
+
+// ==================== 全局事件处理 ====================
+
+/**
+ * Bug #61, #94, #95 - Consolidate multiple document click listeners into one with throttling
+ * Bug #54 - Add Escape key listener to close all panels
+ */
+function initGlobalClickHandler() {
+  DVLogger.init('initGlobalClickHandler');
+  // Bug #94 - 使用事件委托优化性能
+  // Bug #61 - Single document click listener
+  DataVision.handlers.documentClick = (e) => {
+    // Close dropdowns
+    if (!e.target.closest('.action-dropdown') && !e.target.closest('.table-action-btn')) {
+      closeAllDropdowns();
+    }
+
+    // Close filter panel
+    const filterPanel = document.querySelector('.filter-panel');
+    const filterBtn = document.querySelector('#overview .table-actions .btn-secondary');
+    if (filterPanel && filterPanel.style.display === 'block' && !filterPanel.contains(e.target) && !filterBtn?.contains(e.target)) {
+      filterPanel.style.display = 'none';
+      // Bug #128 - 关闭filter panel时也清理resize监听器
+      if (DataVision.handlers.filterResize) {
+        window.removeEventListener('resize', DataVision.handlers.filterResize);
+        DataVision.handlers.filterResize = null;
+      }
+    }
+
+    // Close notification panel
+    const notifPanel = document.querySelector('.notification-panel');
+    const notifBtn = document.getElementById('notifications');
+    if (notifPanel && !notifPanel.contains(e.target) && !notifBtn?.contains(e.target)) {
+      notifPanel.style.display = 'none';
+      // Bug #48 - Clean up resize listener
+      if (DataVision.handlers.notifResize) {
+        window.removeEventListener('resize', DataVision.handlers.notifResize);
+        DataVision.handlers.notifResize = null;
+      }
+    }
+  };
+  document.addEventListener('click', DataVision.handlers.documentClick);
+
+  // Bug #54 - Escape key to close all panels
+  DataVision.handlers.keydown = (e) => {
+    if (e.key === 'Escape') {
+      closeAllPanels();
+    }
+  };
+  document.addEventListener('keydown', DataVision.handlers.keydown);
+
+  // Bug #8, #95 - Scroll should close all floating panels with throttling
+  // Bug #211 - 使用命名空间管理 scrollDebounceTimer
+  DataVision.handlers.scroll = () => {
+    if (DataVision.scrollDebounceTimer) return;
+    DataVision.scrollDebounceTimer = setTimeout(() => {
+      DVLogger.timer('setTimeout', 'scrollDebounce');
+      closeAllPanels();
+      DataVision.scrollDebounceTimer = null;
+    }, 100);
+  };
+  window.addEventListener('scroll', DataVision.handlers.scroll, { passive: true });
+}

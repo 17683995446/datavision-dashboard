@@ -2,6 +2,8 @@
  * DataVision - 极致数据可视化平台
  * 主应用脚本（完整重写版）
  * 第9轮修复：修复20个混乱场景下的隐藏缺陷（#129-#152）
+ * 第10轮修复：修复30个资源管理与竞态缺陷（#153-#209）
+ * 第11轮修复：修复14个边界条件与健壮性缺陷（#210-#232）
  */
 
 // ==================== 全局状态 ====================
@@ -21,12 +23,14 @@ const DataVision = {
   },
   
   // 事件处理器引用（用于清理）
+  // Bug #153 - 添加 hashchange handler 引用
   handlers: {
     notifResize: null,
     filterResize: null,
     scroll: null,
     keydown: null,
-    documentClick: null
+    documentClick: null,
+    hashchange: null
   },
   
   // 搜索防抖定时器
@@ -35,8 +39,28 @@ const DataVision = {
   // 报表搜索防抖定时器
   reportSearchDebounceTimer: null,
   
-  // 主题更新锁（防止竞态条件）
-  themeUpdateLock: false,
+  // Bug #167 - 移除 themeUpdateLock，依赖 debounce 机制
+
+  // Bug #159, #191 - 主题切换防抖定时器
+  themeDebounceTimer: null,
+
+  // Bug #211 - 滚动防抖定时器
+  scrollDebounceTimer: null,
+
+  // Bug #210 - switchSection 防重入标志
+  _isSwitching: false,
+
+  // Bug #165 - 计数器动画进行中标志
+  _counterAnimating: false,
+
+  // Bug #161 - 上一节区域追踪（用于暂停/恢复实时定时器）
+  _lastSection: null,
+
+  // Bug #218 - Toast 最大数量限制
+  MAX_TOASTS: 5,
+
+  // Bug #229 - Toast 定时器追踪
+  toastTimers: [],
 
   // Bug #120 - 导出进行中锁
   exportInProgress: false,
@@ -49,10 +73,14 @@ const DataVision = {
   animationObserver: null,
 
   // Bug #141, #152 - 日志清理 setTimeout ID 集合
-  logCleanupTimers: []
-};
+  logCleanupTimers: [],
 
-// 保持向后兼容的引用
+  // Bug #279 - 图表刷新防抖定时器
+  chartRefreshDebounceTimer: null,
+
+  // Bug #284 - 导出分块处理定时器
+  exportChunkTimer: null
+};
 const chartInstances = DataVision.chartInstances;
 const gaugeCharts = DataVision.gaugeCharts;
 
@@ -60,106 +88,107 @@ const gaugeCharts = DataVision.gaugeCharts;
 const allTransactions = [
   { id: 'TRX-2024-001', customer: '张三', product: 'MacBook Pro', amount: 18999, status: 'completed', time: '2分钟前' },
   { id: 'TRX-2024-002', customer: '李四', product: 'iPhone 15 Pro', amount: 8999, status: 'completed', time: '5分钟前' },
-  { id: 'TRX-2024-003', customer: '王五', product: 'AirPods Pro', amount: 1999, status: 'pending', time: '8分钟前' },
+  { id: 'TRX-2024-003', customer: '王五', product: 'AirPods Pro', amount: 1999, status: 'processing', time: '8分钟前' },
   { id: 'TRX-2024-004', customer: '赵六', product: 'iPad Air', amount: 4799, status: 'completed', time: '12分钟前' },
   { id: 'TRX-2024-005', customer: '钱七', product: 'Apple Watch', amount: 2999, status: 'failed', time: '15分钟前' },
   { id: 'TRX-2024-006', customer: '孙八', product: 'Magic Mouse', amount: 699, status: 'completed', time: '18分钟前' },
-  { id: 'TRX-2024-007', customer: '周九', product: 'Mac Studio', amount: 16999, status: 'pending', time: '22分钟前' },
+  { id: 'TRX-2024-007', customer: '周九', product: 'Mac Studio', amount: 16999, status: 'processing', time: '22分钟前' },
   { id: 'TRX-2024-008', customer: '吴十', product: 'Studio Display', amount: 11499, status: 'completed', time: '25分钟前' },
   { id: 'TRX-2024-009', customer: '郑一', product: 'HomePod', amount: 2299, status: 'completed', time: '28分钟前' },
   { id: 'TRX-2024-010', customer: '陈二', product: 'Apple TV', amount: 1299, status: 'completed', time: '30分钟前' },
   { id: 'TRX-2024-011', customer: '林三', product: 'MacBook Air', amount: 9999, status: 'completed', time: '35分钟前' },
-  { id: 'TRX-2024-012', customer: '黄四', product: 'iPad Pro', amount: 8999, status: 'pending', time: '40分钟前' },
+  { id: 'TRX-2024-012', customer: '黄四', product: 'iPad Pro', amount: 8999, status: 'processing', time: '40分钟前' },
   { id: 'TRX-2024-013', customer: '杨五', product: 'AirPods Max', amount: 4399, status: 'completed', time: '45分钟前' },
   { id: 'TRX-2024-014', customer: '刘六', product: 'iMac', amount: 14999, status: 'failed', time: '50分钟前' },
   { id: 'TRX-2024-015', customer: '许七', product: 'Mac mini', amount: 6999, status: 'completed', time: '55分钟前' },
   { id: 'TRX-2024-016', customer: '何八', product: 'iPhone 15', amount: 5999, status: 'completed', time: '1小时前' },
-  { id: 'TRX-2024-017', customer: '吕九', product: 'Magic Keyboard', amount: 2499, status: 'pending', time: '1小时前' },
+  { id: 'TRX-2024-017', customer: '吕九', product: 'Magic Keyboard', amount: 2499, status: 'processing', time: '1小时前' },
   { id: 'TRX-2024-018', customer: '施十', product: 'Apple Pencil', amount: 999, status: 'completed', time: '1小时前' },
   { id: 'TRX-2024-019', customer: '张伟', product: 'MacBook Pro 16', amount: 27999, status: 'completed', time: '2小时前' },
   { id: 'TRX-2024-020', customer: '王芳', product: 'iPhone 15 Pro Max', amount: 10999, status: 'failed', time: '2小时前' },
   { id: 'TRX-2024-021', customer: '李强', product: 'iPad mini', amount: 3999, status: 'completed', time: '2小时前' },
   { id: 'TRX-2024-022', customer: '赵敏', product: 'Apple Watch Ultra', amount: 6499, status: 'completed', time: '3小时前' },
-  { id: 'TRX-2024-023', customer: '孙丽', product: 'HomePod mini', amount: 749, status: 'pending', time: '3小时前' },
+  { id: 'TRX-2024-023', customer: '孙丽', product: 'HomePod mini', amount: 749, status: 'processing', time: '3小时前' },
   { id: 'TRX-2024-024', customer: '周杰', product: 'Mac Pro', amount: 55999, status: 'completed', time: '3小时前' },
   { id: 'TRX-2024-025', customer: '吴磊', product: 'Pro Display XDR', amount: 39999, status: 'completed', time: '4小时前' },
   { id: 'TRX-2024-026', customer: '郑爽', product: 'AirTag 4件装', amount: 779, status: 'completed', time: '4小时前' },
   { id: 'TRX-2024-027', customer: '冯刚', product: 'MagSafe充电器', amount: 399, status: 'failed', time: '5小时前' },
   { id: 'TRX-2024-028', customer: '陈晓', product: 'Beats Fit Pro', amount: 1599, status: 'completed', time: '5小时前' },
-  { id: 'TRX-2024-029', customer: '褚明', product: 'Apple TV 4K', amount: 1499, status: 'pending', time: '6小时前' },
+  { id: 'TRX-2024-029', customer: '褚明', product: 'Apple TV 4K', amount: 1499, status: 'processing', time: '6小时前' },
   { id: 'TRX-2024-030', customer: '卫华', product: 'MacBook Pro 14', amount: 19999, status: 'completed', time: '6小时前' },
   { id: 'TRX-2024-031', customer: '蒋涛', product: 'iPhone SE', amount: 3499, status: 'completed', time: '7小时前' },
   { id: 'TRX-2024-032', customer: '沈静', product: 'iPad Air 5', amount: 5499, status: 'completed', time: '7小时前' },
-  { id: 'TRX-2024-033', customer: '韩超', product: 'Studio Display', amount: 11499, status: 'pending', time: '8小时前' },
+  { id: 'TRX-2024-033', customer: '韩超', product: 'Studio Display', amount: 11499, status: 'processing', time: '8小时前' },
   { id: 'TRX-2024-034', customer: '杨洋', product: 'Magic Trackpad', amount: 999, status: 'completed', time: '8小时前' },
   { id: 'TRX-2024-035', customer: '朱迪', product: 'AirPods 3', amount: 1399, status: 'failed', time: '9小时前' },
   { id: 'TRX-2024-036', customer: '秦风', product: 'Mac Studio Ultra', amount: 31999, status: 'completed', time: '9小时前' },
   { id: 'TRX-2024-037', customer: '许晴', product: 'Apple Watch SE', amount: 1999, status: 'completed', time: '10小时前' },
-  { id: 'TRX-2024-038', customer: '何冰', product: 'Beats Studio3', amount: 2499, status: 'pending', time: '10小时前' },
+  { id: 'TRX-2024-038', customer: '何冰', product: 'Beats Studio3', amount: 2499, status: 'processing', time: '10小时前' },
   { id: 'TRX-2024-039', customer: '吕良', product: 'iMac 24', amount: 10999, status: 'completed', time: '11小时前' },
   { id: 'TRX-2024-040', customer: '施恩', product: 'Mac mini M2', amount: 4499, status: 'completed', time: '12小时前' },
   { id: 'TRX-2024-041', customer: '张琳', product: 'iPhone 14', amount: 4999, status: 'completed', time: '12小时前' },
   { id: 'TRX-2024-042', customer: '王浩', product: 'iPad Pro 12.9', amount: 10499, status: 'failed', time: '13小时前' },
   { id: 'TRX-2024-043', customer: '李娜', product: 'AirPods Pro 2', amount: 1899, status: 'completed', time: '14小时前' },
   { id: 'TRX-2024-044', customer: '赵鹏', product: 'MacBook Air M2', amount: 9499, status: 'completed', time: '15小时前' },
-  { id: 'TRX-2024-045', customer: '孙悦', product: 'Apple Watch Series 9', amount: 3199, status: 'pending', time: '16小时前' },
+  { id: 'TRX-2024-045', customer: '孙悦', product: 'Apple Watch Series 9', amount: 3199, status: 'processing', time: '16小时前' },
   { id: 'TRX-2024-046', customer: '周涛', product: 'HomePod 2', amount: 2299, status: 'completed', time: '17小时前' },
   { id: 'TRX-2024-047', customer: '吴京', product: 'Mac Pro Rack', amount: 69999, status: 'completed', time: '18小时前' },
   { id: 'TRX-2024-048', customer: '郑爽', product: 'iPhone 15 Plus', amount: 7999, status: 'completed', time: '19小时前' },
   { id: 'TRX-2024-049', customer: '冯绍', product: 'iPad 10', amount: 3599, status: 'failed', time: '20小时前' },
   { id: 'TRX-2024-050', customer: '陈坤', product: 'Magic Mouse 2', amount: 599, status: 'completed', time: '21小时前' },
   { id: 'TRX-2024-051', customer: '褚遂', product: 'Beats Solo3', amount: 1799, status: 'completed', time: '22小时前' },
-  { id: 'TRX-2024-052', customer: '卫青', product: 'MacBook Pro 13', amount: 14999, status: 'pending', time: '23小时前' },
+  { id: 'TRX-2024-052', customer: '卫青', product: 'MacBook Pro 13', amount: 14999, status: 'processing', time: '23小时前' },
   { id: 'TRX-2024-053', customer: '蒋欣', product: 'AirTag', amount: 229, status: 'completed', time: '1天前' },
   { id: 'TRX-2024-054', customer: '沈腾', product: 'Apple TV HD', amount: 1099, status: 'completed', time: '1天前' },
   { id: 'TRX-2024-055', customer: '韩寒', product: 'MagSafe Duo', amount: 999, status: 'failed', time: '1天前' },
   { id: 'TRX-2024-056', customer: '杨幂', product: 'iPad Pro M4', amount: 8999, status: 'completed', time: '1天前' },
   { id: 'TRX-2024-057', customer: '朱茵', product: 'Mac Studio Max', amount: 24999, status: 'completed', time: '1天前' },
-  { id: 'TRX-2024-058', customer: '秦岚', product: 'AirPods Max 2', amount: 4999, status: 'pending', time: '2天前' },
+  { id: 'TRX-2024-058', customer: '秦岚', product: 'AirPods Max 2', amount: 4999, status: 'processing', time: '2天前' },
   { id: 'TRX-2024-059', customer: '许巍', product: 'iMac Pro', amount: 49999, status: 'completed', time: '2天前' },
   { id: 'TRX-2024-060', customer: '何炅', product: 'Beats Flex', amount: 499, status: 'completed', time: '2天前' },
   { id: 'TRX-2024-061', customer: '吕燕', product: 'MacBook Air 15', amount: 12499, status: 'completed', time: '2天前' },
   { id: 'TRX-2024-062', customer: '施耐', product: 'Apple Watch Nike', amount: 3499, status: 'failed', time: '3天前' },
   { id: 'TRX-2024-063', customer: '秦海', product: 'iPad 9', amount: 2499, status: 'completed', time: '3天前' },
   { id: 'TRX-2024-064', customer: '吴越', product: 'Mac mini Pro', amount: 12999, status: 'completed', time: '3天前' },
-  { id: 'TRX-2024-065', customer: '郑恺', product: 'iPhone 13', amount: 3999, status: 'pending', time: '4天前' },
+  { id: 'TRX-2024-065', customer: '郑恺', product: 'iPhone 13', amount: 3999, status: 'processing', time: '4天前' },
   { id: 'TRX-2024-066', customer: '冯小', product: 'AirPods 2', amount: 999, status: 'completed', time: '4天前' },
   { id: 'TRX-2024-067', customer: '陈赫', product: 'Pro Display', amount: 39999, status: 'completed', time: '5天前' },
   { id: 'TRX-2024-068', customer: '褚琳', product: 'Beats Powerbeats', amount: 1499, status: 'failed', time: '5天前' },
   { id: 'TRX-2024-069', customer: '卫兰', product: 'MacBook Air M3', amount: 10999, status: 'completed', time: '5天前' },
   { id: 'TRX-2024-070', customer: '蒋大', product: 'Apple Watch Ultra 2', amount: 6999, status: 'completed', time: '6天前' },
-  { id: 'TRX-2024-071', customer: '沈月', product: 'iPad Air M2', amount: 6499, status: 'pending', time: '6天前' },
+  { id: 'TRX-2024-071', customer: '沈月', product: 'iPad Air M2', amount: 6499, status: 'processing', time: '6天前' },
   { id: 'TRX-2024-072', customer: '韩红', product: 'Mac Pro M2 Ultra', amount: 79999, status: 'completed', time: '7天前' },
   { id: 'TRX-2024-073', customer: '杨子', product: 'iPhone 14 Pro', amount: 7999, status: 'completed', time: '7天前' },
   { id: 'TRX-2024-074', customer: '朱丽', product: 'AirPods Pro USB-C', amount: 1899, status: 'failed', time: '8天前' },
   { id: 'TRX-2024-075', customer: '秦昊', product: 'Mac Studio M2 Max', amount: 29999, status: 'completed', time: '8天前' },
   { id: 'TRX-2024-076', customer: '许光', product: 'iPad Pro M2', amount: 7999, status: 'completed', time: '9天前' },
-  { id: 'TRX-2024-077', customer: '何穗', product: 'Apple Watch Hermès', amount: 12499, status: 'pending', time: '9天前' },
+  { id: 'TRX-2024-077', customer: '何穗', product: 'Apple Watch Hermès', amount: 12499, status: 'processing', time: '9天前' },
   { id: 'TRX-2024-078', customer: '吕良', product: 'MacBook Pro M3 Max', amount: 27999, status: 'completed', time: '10天前' },
   { id: 'TRX-2024-079', customer: '施华', product: 'Beats Studio Buds', amount: 999, status: 'completed', time: '10天前' },
   { id: 'TRX-2024-080', customer: '秦刚', product: 'iMac 27', amount: 17999, status: 'failed', time: '11天前' },
   { id: 'TRX-2024-081', customer: '吴京', product: 'iPhone 15 Pro Max 1TB', amount: 13999, status: 'completed', time: '11天前' },
   { id: 'TRX-2024-082', customer: '郑爽', product: 'Mac mini M2 Pro', amount: 9999, status: 'completed', time: '12天前' },
-  { id: 'TRX-2024-083', customer: '冯巩', product: 'AirPods Max Lightning', amount: 4399, status: 'pending', time: '12天前' },
+  { id: 'TRX-2024-083', customer: '冯巩', product: 'AirPods Max Lightning', amount: 4399, status: 'processing', time: '12天前' },
   { id: 'TRX-2024-084', customer: '陈宝', product: 'Studio Display Nano', amount: 11499, status: 'completed', time: '13天前' },
   { id: 'TRX-2024-085', customer: '褚时', product: 'Mac Pro M2', amount: 59999, status: 'completed', time: '13天前' },
   { id: 'TRX-2024-086', customer: '卫子', product: 'iPad mini 6', amount: 3799, status: 'failed', time: '14天前' },
   { id: 'TRX-2024-087', customer: '蒋雯', product: 'Apple Watch Series 8', amount: 2999, status: 'completed', time: '14天前' },
   { id: 'TRX-2024-088', customer: '沈从', product: 'MacBook Air M1', amount: 7999, status: 'completed', time: '15天前' },
-  { id: 'TRX-2024-089', customer: '韩梅', product: 'iPhone 12', amount: 3499, status: 'pending', time: '15天前' },
+  { id: 'TRX-2024-089', customer: '韩梅', product: 'iPhone 12', amount: 3499, status: 'processing', time: '15天前' },
   { id: 'TRX-2024-090', customer: '杨丽', product: 'AirPods 3 USB-C', amount: 1399, status: 'completed', time: '16天前' },
   { id: 'TRX-2024-091', customer: '朱骏', product: 'Mac Studio M2 Ultra', amount: 42999, status: 'completed', time: '16天前' },
   { id: 'TRX-2024-092', customer: '秦鹏', product: 'iPad Pro 11 M4', amount: 7999, status: 'failed', time: '17天前' },
   { id: 'TRX-2024-093', customer: '许巍', product: 'Apple Watch Edition', amount: 9999, status: 'completed', time: '17天前' },
   { id: 'TRX-2024-094', customer: '何平', product: 'MacBook Pro 14 M3', amount: 16999, status: 'completed', time: '18天前' },
-  { id: 'TRX-2024-095', customer: '吕蒙', product: 'iPhone 14 Plus', amount: 6999, status: 'pending', time: '18天前' },
+  { id: 'TRX-2024-095', customer: '吕蒙', product: 'iPhone 14 Plus', amount: 6999, status: 'processing', time: '18天前' },
   { id: 'TRX-2024-096', customer: '施恩', product: 'Beats Pill', amount: 1299, status: 'completed', time: '19天前' }
 ];
 
 // 分页状态
 let currentPage = 1;
 const pageSize = 10;
-let filteredTransactions = [...allTransactions];
+// Bug #223 - filteredTransactions 初始值为空数组，由 applyFilters 填充
+let filteredTransactions = [];
 
 // 当前筛选状态
 let currentStatusFilter = 'all';
@@ -171,12 +200,29 @@ let currentLogLevel = 'all';
 // Bug #84 - 页面卸载时清理所有资源
 window.addEventListener('beforeunload', () => {
   // 清理定时器
-  if (DataVision.intervals.gauge) clearInterval(DataVision.intervals.gauge);
-  if (DataVision.intervals.log) clearInterval(DataVision.intervals.log);
-  
+  if (DataVision.intervals.gauge) { clearInterval(DataVision.intervals.gauge); }
+  if (DataVision.intervals.log) { clearInterval(DataVision.intervals.log); }
+
   // 清理防抖定时器
   if (DataVision.searchDebounceTimer) clearTimeout(DataVision.searchDebounceTimer);
-  if (DataVision.reportSearchDebounceTimer) clearTimeout(DataVision.reportSearchDebounceTimer);
+  // Bug #299 - 清理 reportSearchDebounceTimer 并设置为 null
+  if (DataVision.reportSearchDebounceTimer) { clearTimeout(DataVision.reportSearchDebounceTimer); DataVision.reportSearchDebounceTimer = null; }
+  // Bug #191 - 清理主题切换防抖定时器
+  if (DataVision.themeDebounceTimer) clearTimeout(DataVision.themeDebounceTimer);
+  // Bug #211 - 清理滚动防抖定时器
+  if (DataVision.scrollDebounceTimer) clearTimeout(DataVision.scrollDebounceTimer);
+  
+  // Bug #166 - 清理入场动画和日志清理定时器
+  DataVision.entryAnimTimers.forEach(timerId => clearTimeout(timerId));
+  DataVision.entryAnimTimers = [];
+  DataVision.logCleanupTimers.forEach(timerId => clearTimeout(timerId));
+  DataVision.logCleanupTimers = [];
+  // Bug #229 - 清理 toast 定时器
+  // Bug #281 - 清理toast定时器时先clearTimeout
+  DataVision.toastTimers.forEach(timerId => clearTimeout(timerId));
+  DataVision.toastTimers.length = 0;
+  // Bug #284 - 清理导出分块处理定时器
+  if (DataVision.exportChunkTimer) { clearTimeout(DataVision.exportChunkTimer); DataVision.exportChunkTimer = null; }
   
   // 销毁所有Chart.js实例
   DataVision.chartInstances.forEach(chart => {
@@ -186,22 +232,50 @@ window.addEventListener('beforeunload', () => {
   });
   DataVision.chartInstances.length = 0;
   
+  // Bug #241 - gaugeCharts 引用的图表已在 chartInstances 中销毁，只需清空引用
+  DataVision.gaugeCharts = {};
+  
   // 清理事件监听器
   if (DataVision.handlers.notifResize) {
     window.removeEventListener('resize', DataVision.handlers.notifResize);
+    DataVision.handlers.notifResize = null;  // Bug #251
   }
   if (DataVision.handlers.filterResize) {
     window.removeEventListener('resize', DataVision.handlers.filterResize);
+    DataVision.handlers.filterResize = null;  // Bug #251
   }
+  // Bug #160 - scroll handler 移除时匹配 passive 选项
   if (DataVision.handlers.scroll) {
-    window.removeEventListener('scroll', DataVision.handlers.scroll);
+    window.removeEventListener('scroll', DataVision.handlers.scroll, { passive: true });
+    DataVision.handlers.scroll = null;  // Bug #251
   }
   if (DataVision.handlers.keydown) {
     document.removeEventListener('keydown', DataVision.handlers.keydown);
+    DataVision.handlers.keydown = null;  // Bug #251
   }
   if (DataVision.handlers.documentClick) {
     document.removeEventListener('click', DataVision.handlers.documentClick);
+    DataVision.handlers.documentClick = null;  // Bug #251
   }
+  // Bug #153 - 清理 hashchange handler
+  if (DataVision.handlers.hashchange) {
+    window.removeEventListener('hashchange', DataVision.handlers.hashchange);
+    DataVision.handlers.hashchange = null;  // Bug #251
+  }
+  
+  // Bug #222 - 断开 IntersectionObserver 连接
+  if (DataVision.counterObserver) DataVision.counterObserver.disconnect();
+  if (DataVision.animationObserver) DataVision.animationObserver.disconnect();
+
+  // Bug #260 - 重置所有计数器的动画标志
+  document.querySelectorAll('.metric-value[data-target]').forEach(counter => {
+    counter._counterAnimating = false;
+    counter._counterAnimated = false;
+    if (counter._counterAnimFrame) {
+      cancelAnimationFrame(counter._counterAnimFrame);
+      counter._counterAnimFrame = null;
+    }
+  });
 });
 
 /**
@@ -210,9 +284,13 @@ window.addEventListener('beforeunload', () => {
 function escapeHtml(str) {
   // Bug #145 - 空值检查，防止 null/undefined 显示为字符串
   if (str == null) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  // Bug #168 - 使用正则替换代替 DOM 创建，更高效且避免潜在问题
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ==================== 页面加载入口 ====================
@@ -231,9 +309,9 @@ function initApp() {
   initAnimations();
   initCharts();
   initCounters();
-  initTable();
   initSearch();
   initPagination();
+  initTable();
   initDateRange();
   initExportButton();
   initFilterPanel();
@@ -301,19 +379,38 @@ function showToast(message, type = 'success') {
 
   toastContainer.appendChild(toast);
 
+  // Bug #218 - 限制最大 Toast 数量，防止无限累积
+  while (toastContainer.children.length > DataVision.MAX_TOASTS) {
+    const oldest = toastContainer.firstChild;
+    if (oldest) {
+      oldest.style.transform = 'translateX(120%)';
+      oldest.style.opacity = '0';
+      setTimeout(() => { if (oldest.parentNode) oldest.parentNode.removeChild(oldest); }, 400);
+    }
+  }
+
   // 入场动画
   requestAnimationFrame(() => {
     toast.style.transform = 'translateX(0)';
   });
 
   // 3秒后自动消失
-  setTimeout(() => {
+  // Bug #229 - 追踪 toast 定时器以便清理
+  const toastTimer = setTimeout(() => {
     toast.style.transform = 'translateX(120%)';
     toast.style.opacity = '0';
-    setTimeout(() => {
+    const removeTimer = setTimeout(() => {
       if (toast.parentNode) toast.parentNode.removeChild(toast);
+      // 从追踪列表中移除
+      const idx = DataVision.toastTimers.indexOf(removeTimer);
+      if (idx !== -1) DataVision.toastTimers.splice(idx, 1);
     }, 400);
+    DataVision.toastTimers.push(removeTimer);
+    // 从追踪列表中移除自身
+    const tIdx = DataVision.toastTimers.indexOf(toastTimer);
+    if (tIdx !== -1) DataVision.toastTimers.splice(tIdx, 1);
   }, 3000);
+  DataVision.toastTimers.push(toastTimer);
 }
 
 // ==================== 导航功能 ====================
@@ -328,79 +425,113 @@ function initNavigation() {
 
   // 通用导航切换函数
   function switchSection(targetId) {
-    // Bug #129 - 清理上一轮的入场动画 setTimeout，防止"幽灵"回调
-    DataVision.entryAnimTimers.forEach(timerId => clearTimeout(timerId));
-    DataVision.entryAnimTimers = [];
-
-    // 更新所有导航的 active 状态
-    navLinks.forEach(l => {
-      l.classList.remove('active');
-      if (l.getAttribute('href') === '#' + targetId) l.classList.add('active');
-    });
-    sidebarLinks.forEach(l => {
-      l.classList.remove('active');
-      if (l.getAttribute('href') === '#' + targetId) l.classList.add('active');
-    });
-
-    // 切换内容区域
-    sections.forEach(section => {
-      section.classList.remove('active');
-      if (section.id === targetId) {
-        section.classList.add('active');
+    // Bug #171 - 防重入保护
+    if (DataVision._isSwitching) {  return; }
+    DataVision._isSwitching = true;
+    try {
+      // Bug #172 - 验证目标 section 是否存在，不存在则回退到 overview
+      const validSections = document.querySelectorAll('.section');
+      const validIds = Array.from(validSections).map(s => s.id);
+      if (!validIds.includes(targetId)) {
+        targetId = 'overview';
       }
-    });
 
-    // Bug #148 - 离开实时监控时暂停定时器，返回时恢复
-    if (targetId === 'realtime') {
-      // 恢复定时器（如果之前被暂停）
-      if (!DataVision.intervals.gauge) simulateRealtimeUpdates();
-    } else if (DataVision._lastSection === 'realtime') {
-      // 离开实时监控，暂停定时器
-      if (DataVision.intervals.gauge) {
-        clearInterval(DataVision.intervals.gauge);
-        DataVision.intervals.gauge = null;
-      }
-      if (DataVision.intervals.log) {
-        clearInterval(DataVision.intervals.log);
-        DataVision.intervals.log = null;
-      }
-    }
-    DataVision._lastSection = targetId;
+      // Bug #129 - 清理上一轮的入场动画 setTimeout，防止"幽灵"回调
+      DataVision.entryAnimTimers.forEach(timerId => clearTimeout(timerId));
+      DataVision.entryAnimTimers = [];
 
-    // Update URL hash without triggering hashchange
-    if (history.replaceState) {
-      history.replaceState(null, '', '#' + targetId);
-    } else {
-      location.hash = targetId;
-    }
+      // 更新所有导航的 active 状态
+      navLinks.forEach(l => {
+        l.classList.remove('active');
+        if (l.getAttribute('href') === '#' + targetId) l.classList.add('active');
+      });
+      sidebarLinks.forEach(l => {
+        l.classList.remove('active');
+        if (l.getAttribute('href') === '#' + targetId) l.classList.add('active');
+      });
 
-    // Bug #57 - IntersectionObserver on hidden sections: manually trigger animations
-    const activeSection = document.getElementById(targetId);
-    if (activeSection) {
-      // Bug #139 - 重置计数器的 _counterAnimated 标志，允许重新动画
-      const counters = activeSection.querySelectorAll('.metric-value[data-target]');
-      counters.forEach(counter => {
-        counter._counterAnimated = false;
-        if (counter._counterAnimFrame) {
-          cancelAnimationFrame(counter._counterAnimFrame);
-          counter._counterAnimFrame = null;
+      // 切换内容区域
+      sections.forEach(section => {
+        section.classList.remove('active');
+        if (section.id === targetId) {
+          section.classList.add('active');
         }
-        const target = parseFloat(counter.dataset.target);
-        const prefix = counter.dataset.prefix || '';
-        const suffix = counter.dataset.suffix || '';
-        animateCounter(counter, target, prefix, suffix);
       });
 
-      // Bug #144 - 重置动画类，确保每次进入 section 都有入场动画
-      const animatedEls = activeSection.querySelectorAll('[data-animate]');
-      animatedEls.forEach(el => {
-        el.classList.remove('animated');
-        const delay = el.dataset.delay || 0;
-        const timerId = setTimeout(() => {
-          el.classList.add('animated');
-        }, delay);
-        DataVision.entryAnimTimers.push(timerId);
-      });
+      // Bug #148 - 离开实时监控时暂停定时器，返回时恢复
+      // Bug #195 - 只在定时器不存在且 _lastSection 不为 null 时恢复
+      if (targetId === 'realtime') {
+        if (!DataVision.intervals.gauge && DataVision._lastSection !== null) {
+          simulateRealtimeUpdates();
+        }
+      } else if (DataVision._lastSection === 'realtime') {
+        // 离开实时监控，暂停定时器
+        if (DataVision.intervals.gauge) {
+          clearInterval(DataVision.intervals.gauge);
+          DataVision.intervals.gauge = null;
+        }
+        if (DataVision.intervals.log) {
+          clearInterval(DataVision.intervals.log);
+          DataVision.intervals.log = null;
+        }
+      }
+      DataVision._lastSection = targetId;
+
+      // Update URL hash without triggering hashchange
+      if (history.replaceState) {
+        history.replaceState(null, '', '#' + targetId);
+        // Bug #234 - replaceState 不触发 hashchange，可以立即重置
+        DataVision._isSwitching = false;
+      } else {
+        location.hash = targetId;
+        // Bug #234 - hashchange 是异步派发的，_isSwitching 需要在 hashchange 回调之后才重置
+        setTimeout(() => { DataVision._isSwitching = false;  }, 0);
+        return; // 跳过后续动画触发，避免 hashchange 递归时双重执行
+      }
+
+      // Bug #57 - IntersectionObserver on hidden sections: manually trigger animations
+      const activeSection = document.getElementById(targetId);
+      if (activeSection && targetId === 'overview') {
+        // Bug #139, #273 - 只在overview页面触发计数器动画
+        const counters = activeSection.querySelectorAll('.metric-value[data-target]');
+        counters.forEach(counter => {
+          counter._counterAnimated = false;
+          if (counter._counterAnimFrame) {
+            cancelAnimationFrame(counter._counterAnimFrame);
+            counter._counterAnimFrame = null;
+          }
+          const target = parseFloat(counter.dataset.target);
+          const prefix = counter.dataset.prefix || '';
+          const suffix = counter.dataset.suffix || '';
+          animateCounter(counter, target, prefix, suffix);
+        });
+      }
+
+      if (activeSection) {
+        // Bug #144 - 重置动画类，确保每次进入 section 都有入场动画
+        const animatedEls = activeSection.querySelectorAll('[data-animate]');
+        animatedEls.forEach(el => {
+          el.classList.remove('animated');
+          const delay = el.dataset.delay || 0;
+          // Bug #174 - delay=0 时使用 requestAnimationFrame 双帧确保浏览器渲染
+          let timerId;
+          if (delay === 0) {
+            timerId = setTimeout(() => {
+              requestAnimationFrame(() => {
+                el.classList.add('animated');
+              });
+            }, 0);
+          } else {
+            timerId = setTimeout(() => {
+              el.classList.add('animated');
+            }, delay);
+          }
+          DataVision.entryAnimTimers.push(timerId);
+        });
+      }
+    } catch (e) {
+      console.error('switchSection error:', e);
+      DataVision._isSwitching = false;
     }
   }
 
@@ -423,12 +554,14 @@ function initNavigation() {
   });
 
   // Bug #3 - hashchange event listener for browser back-forward
-  window.addEventListener('hashchange', () => {
+  // Bug #153 - 存储 handler 引用以便清理
+  DataVision.handlers.hashchange = () => {
     const hash = location.hash.substring(1);
     if (hash) {
       switchSection(hash);
     }
-  });
+  };
+  window.addEventListener('hashchange', DataVision.handlers.hashchange);
 
   // Bug #3 - Check initial hash on page load
   const initialHash = location.hash.substring(1);
@@ -457,9 +590,12 @@ function initAnimations() {
     entries.forEach(entry => {
       if (entry.isIntersecting) {
         const delay = entry.target.dataset.delay || 0;
-        setTimeout(() => {
+        // Bug #162 - 追踪 setTimeout ID 以便后续清理
+        const timerId = setTimeout(() => {
           entry.target.classList.add('animated');
         }, delay);
+        // Bug #266 - IO触发的动画不添加到entryAnimTimers，避免内存泄漏
+        // 因为这些动画不属于特定section，且可能在任何section中触发
         DataVision.animationObserver.unobserve(entry.target);
       }
     });
@@ -479,7 +615,7 @@ function initAnimations() {
  */
 function createChart(canvasId, config) {
   const canvas = document.getElementById(canvasId);
-  if (!canvas) return null;
+  if (!canvas) {  return null; }
 
   // Bug #133 - 检查 Chart.js 是否可用
   if (typeof Chart === 'undefined') {
@@ -494,6 +630,11 @@ function createChart(canvasId, config) {
       const existingChart = DataVision.chartInstances[existingChartIndex];
       existingChart.destroy();
       DataVision.chartInstances.splice(existingChartIndex, 1);
+    }
+
+    // Bug #213 - 清理 gaugeCharts 中的陈旧引用
+    if (DataVision.gaugeCharts[canvasId]) {
+      delete DataVision.gaugeCharts[canvasId];
     }
 
     // Bug #109 - 移除cloneNode，Chart.js的destroy()已足够清理canvas
@@ -869,8 +1010,11 @@ function initCounters() {
         let startTime = null;
 
         const updateCounter = (currentTime) => {
-          // Bug #131 - 检查元素是否仍在DOM中
-          if (!counter.isConnected) return;
+          // Bug #131, #288 - 检查元素是否仍在DOM中
+          if (!counter.isConnected) {
+            counter._counterAnimating = false;  // 重置标志
+            return;
+          }
           if (startTime === null) startTime = currentTime;
           const elapsed = currentTime - startTime;
           const progress = Math.min(elapsed / duration, 1);
@@ -885,10 +1029,14 @@ function initCounters() {
 
           if (progress < 1) {
             counter._counterAnimFrame = requestAnimationFrame(updateCounter);
+          } else {
+            // Bug #228 - 动画完成后重置标志
+            counter._counterAnimating = false;
           }
         };
 
-        requestAnimationFrame(updateCounter);
+        counter._counterAnimating = true;
+        counter._counterAnimFrame = requestAnimationFrame(updateCounter);
         DataVision.counterObserver.unobserve(counter);
       }
     });
@@ -900,9 +1048,10 @@ function initCounters() {
 // ==================== 交易表格 ====================
 
 // 状态映射表
+// Bug #298 - 状态从 pending 改为 processing
 const statusMap = {
   completed: { text: '已完成', class: 'completed' },
-  pending: { text: '处理中', class: 'pending' },
+  processing: { text: '处理中', class: 'processing' },
   failed: { text: '失败', class: 'failed' }
 };
 
@@ -921,8 +1070,8 @@ function initTable() {
       currentSearchQuery = savedSearch;
       const searchInput = document.querySelector('#overview .search-box input');
       if (searchInput) {
-        // 去除转义字符显示
-        searchInput.value = savedSearch.replace(/\\([.*+?^${}()|[\]\\])/g, '$1');
+        // Bug #243 - 恢复搜索值时进行HTML转义，防止XSS
+        searchInput.value = escapeHtml(savedSearch);
       }
     }
     if (savedStatus !== null) {
@@ -932,8 +1081,9 @@ function initTable() {
       currentPage = parseInt(savedPage, 10) || 1;
     }
   } catch (e) { /* ignore */ }
-  
-  applyFilters();
+
+  // Bug #170 - 初始化时传入 fromInit 标志，不重置页码
+  applyFilters({ fromInit: true });
 }
 
 /**
@@ -942,6 +1092,7 @@ function initTable() {
  * @param {Object} options - 可选参数
  * @param {boolean} options.fromPagination - 是否来自分页操作（不重置页码）
  * @param {boolean} options.fromDelete - 是否来自删除操作（智能调整页码）
+ * @param {boolean} options.fromInit - 是否来自初始化（不重置页码）
  */
 function applyFilters(options = {}) {
   // Bug #88 - 保存搜索状态到sessionStorage，页面切换后可恢复
@@ -949,7 +1100,7 @@ function applyFilters(options = {}) {
     sessionStorage.setItem('dv_searchQuery', currentSearchQuery);
     sessionStorage.setItem('dv_statusFilter', currentStatusFilter);
   } catch (e) { /* ignore */ }
-  
+
   // 应用搜索和状态筛选
   // Bug #97 - 搜索查询已经转义，使用原始值进行匹配
   const rawQuery = currentSearchQuery.replace(/\\([.*+?^${}()|[\]\\])/g, '$1').toLowerCase();
@@ -965,7 +1116,8 @@ function applyFilters(options = {}) {
   });
 
   // Bug #110 - 移除错误的URL参数检测，使用显式参数控制页码重置
-  if (!options.fromPagination) {
+  // Bug #170 - fromInit 时也不重置页码
+  if (!options.fromPagination && !options.fromInit) {
     if (options.fromDelete) {
       // Bug #121 - 删除后智能调整页码：如果当前页已空则回退
       const totalPages = Math.ceil(filteredTransactions.length / pageSize);
@@ -1001,7 +1153,10 @@ function renderTable() {
   const pageData = filteredTransactions.slice(startIndex, endIndex);
 
   if (pageData.length === 0) {
-    const cols = filteredTransactions.length === 0 ? 7 : 7;
+    // Bug #232, #250 - 动态计算 colspan，确保是数字防止XSS
+    const thead = tableBody.closest('table')?.querySelector('thead');
+    const colCount = thead ? thead.querySelectorAll('th').length : 7;
+    const cols = parseInt(colCount, 10) || 7;  // 确保是数字
     tableBody.innerHTML = `<tr><td colspan="${cols}" style="text-align:center;padding:48px 20px;color:var(--text-tertiary);grid-column:1/-1;"><div style="display:flex;flex-direction:column;align-items:center;gap:8px;"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><span>暂无匹配的交易记录</span><span style="font-size:12px;">请尝试调整搜索条件或筛选状态</span></div></td></tr>`;
     // Also hide pagination when no results
     const paginationContainer = document.querySelector('#overview .pagination');
@@ -1014,7 +1169,9 @@ function renderTable() {
 
   tableBody.innerHTML = pageData.map(trx => {
     // Bug #45 - statusMap missing defensive check
-    const statusInfo = statusMap[trx.status] || { text: '未知', class: 'status-pending' };
+    // Bug #214 - 未知状态使用 'processing' class（不是 'status-processing'）
+    // Bug #298 - 状态从 pending 改为 processing
+    const statusInfo = statusMap[trx.status] || { text: '未知', class: 'processing' };
     return `
     <tr>
       <td><code>${escapeHtml(trx.id)}</code></td>
@@ -1090,7 +1247,7 @@ function escapeSearchQuery(query) {
  * Bug #90, #102 - 修复分页焦点恢复和状态保持
  */
 function initPagination() {
-  const paginationContainer = document.querySelector('#overview .pagination');
+  const paginationContainer = document.querySelector('.pagination');
   if (!paginationContainer) return;
 
   paginationContainer.addEventListener('click', (e) => {
@@ -1101,15 +1258,16 @@ function initPagination() {
     let pageChanged = false;
     let targetPage = currentPage;
 
-    // 上一页
-    if (btn.querySelector('polyline[points="15 18 9 12 15 6"]')) {
+    // Bug #204 - 使用 data-direction 属性代替 SVG 匹配来识别分页方向
+    const direction = btn.dataset.direction;
+    if (direction === 'prev') {
       if (currentPage > 1) {
         targetPage = currentPage - 1;
         pageChanged = true;
       }
     }
     // 下一页
-    else if (btn.querySelector('polyline[points="9 18 15 12 9 6"]')) {
+    else if (direction === 'next') {
       const totalPages = Math.ceil(filteredTransactions.length / pageSize);
       if (currentPage < totalPages) {
         targetPage = currentPage + 1;
@@ -1140,8 +1298,8 @@ function initPagination() {
         const activeBtn = paginationContainer.querySelector('.btn-page.active');
         if (activeBtn) {
           activeBtn.focus();
-          // 滚动到表格顶部
-          const tableContainer = document.querySelector('#overview .table-container');
+          // Bug #177 - 修正选择器 .table-container → .table-card
+          const tableContainer = document.querySelector('#overview .table-card');
           if (tableContainer) {
             tableContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }
@@ -1155,7 +1313,7 @@ function initPagination() {
  * 渲染分页按钮
  */
 function renderPagination() {
-  const paginationContainer = document.querySelector('#overview .pagination');
+  const paginationContainer = document.querySelector('.pagination');
   if (!paginationContainer) return;
 
   const totalPages = Math.ceil(filteredTransactions.length / pageSize);
@@ -1164,7 +1322,8 @@ function renderPagination() {
   let html = '';
 
   // 上一页按钮
-  html += `<button class="btn-page" ${currentPage === 1 ? 'disabled' : ''} aria-label="上一页">
+  // Bug #204 - 添加 data-direction 属性
+  html += `<button class="btn-page" data-direction="prev" ${currentPage === 1 ? 'disabled' : ''} aria-label="上一页">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polyline points="15 18 9 12 15 6"/>
     </svg>
@@ -1181,7 +1340,8 @@ function renderPagination() {
   });
 
   // 下一页按钮
-  html += `<button class="btn-page" ${currentPage === totalPages ? 'disabled' : ''} aria-label="下一页">
+  // Bug #204 - 添加 data-direction 属性
+  html += `<button class="btn-page" data-direction="next" ${currentPage === totalPages ? 'disabled' : ''} aria-label="下一页">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polyline points="9 18 15 12 9 6"/>
     </svg>
@@ -1236,12 +1396,33 @@ function initDateRange() {
   const rangeButtons = document.querySelectorAll('.btn-range');
   if (rangeButtons.length === 0) return;
 
-  // 不同时间范围的模拟数据
+  // Bug #292 - chartDataByRange用于图表数据，rangeData用于指标卡片数据
+  // Bug #262 - 不同时间范围的模拟数据（包含revenue/users/orders/conversion）
   const rangeData = {
-    '今日': { revenue: 2847500, users: 45231, orders: 1825, conversion: 3.24 },
-    '本周': { revenue: 18925000, users: 312450, orders: 12850, conversion: 3.18 },
-    '本月': { revenue: 76450000, users: 1285000, orders: 54200, conversion: 3.42 },
-    '全年': { revenue: 284750000, users: 5420000, orders: 218000, conversion: 3.56 }
+    '今日': {
+      revenue: 2847500,
+      users: 12580,
+      orders: 342,
+      conversion: 3.2
+    },
+    '本周': {
+      revenue: 19800000,
+      users: 85420,
+      orders: 2156,
+      conversion: 2.8
+    },
+    '本月': {
+      revenue: 85200000,
+      users: 368500,
+      orders: 9842,
+      conversion: 3.1
+    },
+    '全年': {
+      revenue: 1025000000,
+      users: 4520000,
+      orders: 125680,
+      conversion: 3.5
+    }
   };
 
   // Bug #42 - Trend percentages for each time range
@@ -1284,6 +1465,8 @@ function initDateRange() {
 
       // 根据选择的时间范围更新指标数据
       const range = btn.textContent.trim();
+      // Bug #268 - 保存日期范围选择
+      try { sessionStorage.setItem('dv_dateRange', range); } catch (e) { /* ignore */ }
       const data = rangeData[range];
       if (!data) return;
 
@@ -1323,6 +1506,9 @@ function initDateRange() {
                 el.removeChild(el.firstChild);
               }
               el.appendChild(document.createTextNode(trends[index]));
+            } else {
+              // Bug #258 - SVG不存在时直接更新textContent
+              el.textContent = trends[index];
             }
           }
         });
@@ -1343,6 +1529,18 @@ function initDateRange() {
       }
     });
   });
+
+  // Bug #268, #272 - 恢复保存的日期范围选择（必须在事件监听器注册之后）
+  try {
+    const savedRange = sessionStorage.getItem('dv_dateRange');
+    if (savedRange && rangeData[savedRange]) {
+      const btnMap = { '今日': 0, '本周': 1, '本月': 2, '全年': 3 };
+      const btns = document.querySelectorAll('.date-range-btn');
+      if (btns[btnMap[savedRange]]) {
+        btns[btnMap[savedRange]].click();
+      }
+    }
+  } catch (e) { /* ignore */ }
 }
 
 /**
@@ -1355,6 +1553,8 @@ function animateCounter(element, target, prefix, suffix) {
   if (element._counterAnimFrame) {
     cancelAnimationFrame(element._counterAnimFrame);
   }
+  // Bug #236 - 设置动画中标志，防止 IO 重复触发
+  element._counterAnimating = true;
 
   const duration = 1000;
   const startTime = performance.now();
@@ -1363,6 +1563,7 @@ function animateCounter(element, target, prefix, suffix) {
 
   // Bug #92 - 格式化数值，处理极端值
   function formatNumber(num, isFinal = false) {
+    if (!isFinite(num)) return '0';
     // 处理极大值（超过1万亿）
     if (Math.abs(num) >= 1e12) {
       return (num / 1e12).toFixed(isFinal ? 2 : 1) + 'T';
@@ -1403,6 +1604,8 @@ function animateCounter(element, target, prefix, suffix) {
       element._counterAnimated = true;
       // Bug #136 - 存储实际数值，供下次动画使用
       element._currentValue = target;
+      // Bug #236 - 清除动画中标志
+      element._counterAnimating = false;
     }
   }
 
@@ -1430,18 +1633,19 @@ function initExportButton() {
         showToast('导出正在进行中，请稍候', 'warning');
         return;
       }
-      const statusTextMap = { completed: '已完成', pending: '处理中', failed: '失败' };
+      // Bug #298 - 状态从 pending 改为 processing
+      const statusTextMap = { completed: '已完成', processing: '处理中', failed: '失败' };
       const headers = ['交易ID', '客户', '产品', '金额', '状态', '时间'];
-      
+
       // Bug #101 - 大数据量分块处理，避免阻塞UI
       const CHUNK_SIZE = 1000; // 每批处理1000条
       // Bug #130 - 导出时对 filteredTransactions 做快照，防止导出过程中数据被修改
       const exportData = [...filteredTransactions];
       const totalRows = exportData.length;
-      
+
       // Bug #120 - 设置导出锁
       DataVision.exportInProgress = true;
-      
+
       if (totalRows === 0) {
         DataVision.exportInProgress = false;
         showToast('没有可导出的数据', 'warning');
@@ -1465,7 +1669,11 @@ function initExportButton() {
             trx.amount,
             statusTextMap[trx.status] || trx.status,
             trx.time
-          ].map(field => `"${String(field).replace(/"/g, '""')}"`);
+          ].map(field => {
+            // Bug #208 - 正确处理包含换行符和逗号的字段值
+            const str = String(field).replace(/"/g, '""');
+            return `"${str}"`;
+          });
           csvRows.push(row.join(','));
         }
         
@@ -1475,7 +1683,7 @@ function initExportButton() {
       // 同步处理（小数据量）或分块处理（大数据量）
       if (totalRows <= CHUNK_SIZE) {
         try {
-          const csvRows = [headers.join(',')];
+          const csvRows = [headers.map(h => `"${h}"`).join(',')];
           csvRows.push(...processChunk(0));
 
           const csvContent = '\uFEFF' + csvRows.join('\n'); // BOM for Chinese characters
@@ -1484,46 +1692,65 @@ function initExportButton() {
           const link = document.createElement('a');
           link.href = url;
           link.download = `交易数据导出_${new Date().toISOString().slice(0,10)}.csv`;
+          // Bug #188 - Safari 兼容：先添加到 DOM 再触发点击
+          document.body.appendChild(link);
           link.click();
-          // Bug #147 - 延迟 revokeObjectURL，确保下载完成
-          setTimeout(() => URL.revokeObjectURL(url), 10000);
+          document.body.removeChild(link);
+          // Bug #199 - 延长 revokeObjectURL 超时到 60s
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
           showToast('报表导出成功', 'success');
         } catch (e) {
           console.error('导出失败:', e);
           showToast('导出失败，请重试', 'error');
         }
         DataVision.exportInProgress = false;
+        DataVision.exportChunkTimer = null;
       } else {
         // 大数据量使用分块处理
-        const csvRows = [headers.join(',')];
+        const csvRows = [headers.map(h => `"${h}"`).join(',')];
         let processedCount = 0;
 
         const processNextChunk = () => {
-          const chunk = processChunk(processedCount);
-          csvRows.push(...chunk);
-          processedCount += chunk.length;
+          try {
+            const chunk = processChunk(processedCount);
+            csvRows.push(...chunk);
+            processedCount += chunk.length;
 
-          if (processedCount < totalRows) {
-            // 继续处理下一块
-            setTimeout(processNextChunk, 0);
-          } else {
-            // 全部处理完成，触发下载
-            try {
-              const csvContent = '\uFEFF' + csvRows.join('\n');
-              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-              const url = URL.createObjectURL(blob);
-              const link = document.createElement('a');
-              link.href = url;
-              link.download = `交易数据导出_${new Date().toISOString().slice(0,10)}.csv`;
-              link.click();
-              // Bug #147 - 延迟 revokeObjectURL，确保下载完成
-              setTimeout(() => URL.revokeObjectURL(url), 10000);
-              showToast(`成功导出 ${totalRows} 条数据`, 'success');
-            } catch (e) {
-              console.error('导出失败:', e);
-              showToast('导出失败，请重试', 'error');
+            if (processedCount < totalRows) {
+              // 继续处理下一块
+              DataVision.exportChunkTimer = setTimeout(processNextChunk, 0);
+            } else if (processedCount === totalRows) {
+              // Bug #265 - 全部处理完成，触发下载
+              // 全部处理完成，触发下载
+              try {
+                const csvContent = '\uFEFF' + csvRows.join('\n');
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `交易数据导出_${new Date().toISOString().slice(0,10)}.csv`;
+                // Bug #188 - Safari 兼容：先添加到 DOM 再触发点击
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                // Bug #199 - 延长 revokeObjectURL 超时到 60s
+                setTimeout(() => URL.revokeObjectURL(url), 60000);
+                showToast(`成功导出 ${totalRows} 条数据`, 'success');
+                DataVision.exportInProgress = false;
+                DataVision.exportChunkTimer = null;
+              } catch (e) {
+                console.error('导出失败:', e);
+                showToast('导出失败，请重试', 'error');
+                DataVision.exportInProgress = false;
+                DataVision.exportChunkTimer = null;
+              }
             }
+          } catch (e) {
+            // Bug #173 - try-catch 包裹整个 processNextChunk 体
+            console.error('导出处理失败:', e);
+            showToast('导出过程中发生错误', 'error');
             DataVision.exportInProgress = false;
+            DataVision.exportChunkTimer = null;
           }
         };
 
@@ -1557,10 +1784,11 @@ function initFilterPanel() {
     padding:8px;min-width:160px;z-index:50;
     display:none;
   `;
+  // Bug #298 - data-status 从 pending 改为 processing 以匹配 allTransactions 数据
   filterPanel.innerHTML = `
     <div class="filter-option" data-status="all" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--text-primary);transition:background 0.15s;">全部</div>
     <div class="filter-option" data-status="completed" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--text-primary);transition:background 0.15s;">已完成</div>
-    <div class="filter-option" data-status="pending" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--text-primary);transition:background 0.15s;">处理中</div>
+    <div class="filter-option" data-status="processing" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--text-primary);transition:background 0.15s;">处理中</div>
     <div class="filter-option" data-status="failed" style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--text-primary);transition:background 0.15s;">失败</div>
   `;
 
@@ -1578,7 +1806,7 @@ function initFilterPanel() {
       filterPanel.style.left = rect.left + 'px';
       filterPanel.style.display = 'block';
 
-      // Bug #7 - Add resize listener to update filter panel position
+      // Bug #276 - closeAllPanels已清理旧handler，直接创建新的
       DataVision.handlers.filterResize = () => {
         if (filterPanel.style.display === 'block') {
           const r = filterBtn.getBoundingClientRect();
@@ -1605,8 +1833,10 @@ function initFilterPanel() {
     option.addEventListener('click', () => {
       currentStatusFilter = option.dataset.status;
 
-      // 更新按钮文本显示当前筛选
-      const statusTextMap = { all: '筛选', completed: '筛选: 已完成', pending: '筛选: 处理中', failed: '筛选: 失败' };
+      // Bug #230 - 使用 textContent 会清除所有子元素，但此处 filterBtn 只有文本，安全
+      // 如果 filterBtn 包含图标等子元素，应改为只修改文本节点
+      // Bug #298 - statusTextMap key 从 pending 改为 processing 以匹配数据
+      const statusTextMap = { all: '筛选', completed: '筛选: 已完成', processing: '筛选: 处理中', failed: '筛选: 失败' };
       filterBtn.textContent = statusTextMap[currentStatusFilter];
 
       // 关闭面板
@@ -1679,26 +1909,34 @@ function initTableActions() {
     // Bug #50 - Position using getBoundingClientRect, handle viewport overflow
     const btnRect = btn.getBoundingClientRect();
     let top = btnRect.bottom + 4;
-    let left = btnRect.right - 140; // align to right of button
-
+    
+    // Bug #278 - 先appendChild以获取实际尺寸
+    document.body.appendChild(dropdown);
+    
+    // Bug #278 - 使用实际高度而非硬编码
+    const dropdownHeight = dropdown.offsetHeight || 130;
+    
     // Prevent overflow at bottom
-    const dropdownHeight = 130;
     if (top + dropdownHeight > window.innerHeight) {
       top = btnRect.top - dropdownHeight - 4;
     }
+    
+    // Bug #282 - 使用实际宽度而非硬编码
+    const dropdownWidth = dropdown.offsetWidth || 140;
+    let left = btnRect.right - dropdownWidth; // align to right of button
+    
     // Prevent overflow at left
     if (left < 8) {
       left = 8;
     }
     // Prevent overflow at right
-    if (left + 140 > window.innerWidth) {
-      left = window.innerWidth - 148;
+    // Bug #277 - 使用实际宽度而非硬编码
+    if (left + dropdownWidth > window.innerWidth) {
+      left = window.innerWidth - dropdownWidth - 8;
     }
 
     dropdown.style.top = top + 'px';
     dropdown.style.left = left + 'px';
-
-    document.body.appendChild(dropdown);
 
     // 悬停效果
     dropdown.querySelectorAll('.action-item').forEach(item => {
@@ -1714,21 +1952,30 @@ function initTableActions() {
         const id = item.dataset.trxId;
 
         if (action === 'view') {
+          // Bug #301 - view 操作当前只显示提示，实际功能待实现
           showToast(`正在查看交易 ${id} 的详情`, 'info');
+          closeAllDropdowns();
         } else if (action === 'edit') {
+          // Bug #301 - edit 操作当前只显示提示，实际功能待实现
           showToast(`正在编辑交易 ${id}`, 'info');
+          closeAllDropdowns();
         } else if (action === 'delete') {
+          // Bug #219 - 导出进行中不允许删除，防止数据不一致
+          if (DataVision.exportInProgress) {
+            showToast('导出进行中，请稍后再删除', 'warning');
+            return;
+          }
           // Bug #53 - Actually remove the transaction from allTransactions
           const idx = allTransactions.findIndex(t => t.id === id);
           if (idx !== -1) {
+            // Bug #285 - 在 applyFilters 之前关闭下拉菜单
+            closeAllDropdowns();
             allTransactions.splice(idx, 1);
             // Bug #121 - 删除后智能调整页码，不跳回第1页
             applyFilters({ fromDelete: true });
             showToast(`交易 ${id} 已删除`, 'warning');
           }
         }
-
-        closeAllDropdowns();
       });
     });
   });
@@ -1738,7 +1985,10 @@ function initTableActions() {
  * 关闭所有操作下拉菜单
  */
 function closeAllDropdowns() {
-  document.querySelectorAll('.action-dropdown').forEach(d => d.remove());
+  // Bug #226 - 添加 isConnected 检查，防止已移除的元素再次 remove 报错
+  document.querySelectorAll('.action-dropdown').forEach(d => {
+    if (d.isConnected) d.remove();
+  });
 }
 
 /**
@@ -1789,6 +2039,8 @@ function initNotifications() {
     border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,0.15);
     width:340px;max-width:calc(100vw - 48px);z-index:200;display:none;overflow:hidden;
   `;
+  // Bug #269 - 使用innerHTML插入硬编码内容，风险可控
+  // 如果未来需要动态内容，应改为createElement创建DOM节点
   notifPanel.innerHTML = `
     <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
       <span style="font-size:16px;font-weight:600;color:var(--text-primary);">通知</span>
@@ -1845,6 +2097,10 @@ function initNotifications() {
       if (badge) badge.style.display = 'none';
 
       // Bug #48, #105 - Add resize listener to update position when visible
+      // Bug #156 - 先移除旧的 resize 监听器再添加新的
+      if (DataVision.handlers.notifResize) {
+        window.removeEventListener('resize', DataVision.handlers.notifResize);
+      }
       DataVision.handlers.notifResize = () => {
         if (notifPanel.style.display === 'block') {
           const r = notifBtn.getBoundingClientRect();
@@ -1868,21 +2124,22 @@ function initNotifications() {
     });
   });
 
-  // 全部已读
-  const markAllRead = document.getElementById('markAllRead');
+  // Bug #290 - 添加"全部已读"和"查看全部通知"点击事件
+  const markAllRead = notifPanel.querySelector('#markAllRead');
   if (markAllRead) {
-    markAllRead.addEventListener('click', (e) => {
-      e.stopPropagation();
+    markAllRead.addEventListener('click', () => {
+      // Bug #302 - markAllRead 当前只设置 opacity，没有真正标记已读状态，实际功能待实现
+      notifPanel.querySelectorAll('.notif-item').forEach(item => {
+        item.style.opacity = '0.6';
+      });
       showToast('所有通知已标记为已读', 'success');
     });
   }
 
-  // Bug #60 - "View all notifications" link handler
-  const viewAllNotifs = document.getElementById('viewAllNotifications');
-  if (viewAllNotifs) {
-    viewAllNotifs.addEventListener('click', (e) => {
-      e.stopPropagation();
-      showToast('通知中心功能开发中', 'info');
+  const viewAllNotifications = notifPanel.querySelector('#viewAllNotifications');
+  if (viewAllNotifications) {
+    viewAllNotifications.addEventListener('click', () => {
+      showToast('查看全部通知功能开发中', 'info');
     });
   }
 }
@@ -1997,10 +2254,7 @@ function initThemeToggle() {
  * Bug #91 - 添加主题更新锁防止竞态条件
  */
 function updateChartsTheme() {
-  // Bug #91 - 防止快速切换主题导致的竞态条件
-  if (DataVision.themeUpdateLock) return;
-  DataVision.themeUpdateLock = true;
-  
+  // Bug #167 - 移除 themeUpdateLock，依赖 initThemeToggle 中的 debounce 机制
   // 延迟一帧确保 CSS 变量已更新
   requestAnimationFrame(() => {
     const colors = getChartThemeColors();
@@ -2031,11 +2285,15 @@ function updateChartsTheme() {
         chart.data.datasets[0].backgroundColor = [mainColor, colors.border];
       }
 
-      chart.update('none');
+      // Bug #286 - 'none' 动画模式在 Chart.js 3.x+ 支持，旧版本使用 update()
+      if (typeof chart.update === 'function') {
+        try {
+          chart.update('none');
+        } catch (e) {
+          chart.update();
+        }
+      }
     });
-    
-    // Bug #125 - 在所有图表更新完成后释放锁，而非使用固定setTimeout
-    DataVision.themeUpdateLock = false;
   });
 }
 
@@ -2053,8 +2311,8 @@ function updateChartsTheme() {
  */
 function simulateRealtimeUpdates() {
   // 清理现有定时器
-  if (DataVision.intervals.gauge) clearInterval(DataVision.intervals.gauge);
-  if (DataVision.intervals.log) clearInterval(DataVision.intervals.log);
+  if (DataVision.intervals.gauge) {  clearInterval(DataVision.intervals.gauge); }
+  if (DataVision.intervals.log) {  clearInterval(DataVision.intervals.log); }
 
   // Bug #141, #152 - 清理所有挂起的日志清理 setTimeout
   DataVision.logCleanupTimers.forEach(timerId => clearTimeout(timerId));
@@ -2065,7 +2323,9 @@ function simulateRealtimeUpdates() {
     // Bug #87 - 改进的均值回归算法
     Object.keys(DataVision.gaugeCharts).forEach(id => {
       const chart = DataVision.gaugeCharts[id];
-      if (!chart || !chart.data || !chart.data.datasets) return;
+      // Bug #280 - 显式检查chart是否存在
+      if (!chart || !chart.canvas) return;
+      if (!chart.data || !chart.data.datasets) return;
 
       const currentValue = chart.data.datasets[0].data[0];
       // Bug #87 - 改进的均值回归算法：使用更平滑的回归和更合理的波动
@@ -2133,8 +2393,8 @@ function simulateRealtimeUpdates() {
       <div class="log-message">${escapeHtml(randomMsg.message)}</div>
     `;
 
-    // Bug #44 - Check current active filter level; hide if doesn't match
-    if (currentLogLevel !== 'all' && randomMsg.level !== currentLogLevel) {
+    // Bug #44, #261 - Check current active filter level; hide if doesn't match
+    if (typeof currentLogLevel !== 'undefined' && currentLogLevel && currentLogLevel !== 'all' && randomMsg.level !== currentLogLevel) {
       logItem.style.display = 'none';
     }
 
@@ -2156,6 +2416,9 @@ function simulateRealtimeUpdates() {
         // Bug #141, #152 - 跟踪 setTimeout ID 以便后续清理
         const cleanupTimer = setTimeout(() => {
           if (oldChild.parentNode) oldChild.remove();
+          // Bug #157 - 执行后从数组中移除
+          const idx = DataVision.logCleanupTimers.indexOf(cleanupTimer);
+          if (idx !== -1) DataVision.logCleanupTimers.splice(idx, 1);
         }, 300);
         DataVision.logCleanupTimers.push(cleanupTimer);
       }
@@ -2238,7 +2501,8 @@ function initReportActions() {
           if (!noResultRow) {
             noResultRow = document.createElement('tr');
             noResultRow.className = 'no-results-row';
-            noResultRow.innerHTML = `<td colspan="7" style="text-align:center;padding:48px 20px;color:var(--text-tertiary);">未找到匹配的报表</td>`;
+            const colCount = reportTable.querySelectorAll('thead th').length || 7;
+            noResultRow.innerHTML = `<td colspan="${colCount}" style="text-align:center;padding:48px 20px;color:var(--text-tertiary);">未找到匹配的报表</td>`;
             tbody.appendChild(noResultRow);
           }
         } else if (noResultRow) {
@@ -2283,12 +2547,22 @@ function initReportActions() {
         setTimeout(() => {
           row.remove();
           showToast(`${reportName} 已删除`, 'warning');
-          // Bug #149 - 更新报表列表的 page-info 计数
           const pageInfo = document.querySelector('#reports .page-info');
+          const tbody = reportTable.querySelector('tbody');
+          const remainingRows = tbody ? tbody.querySelectorAll('tr:not(.no-results-row)').length : 0;
           if (pageInfo) {
-            const tbody = reportTable.querySelector('tbody');
-            const remainingRows = tbody ? tbody.querySelectorAll('tr:not(.no-results-row)').length : 0;
             pageInfo.textContent = `显示 ${remainingRows > 0 ? 1 : 0}-${remainingRows} 共 ${remainingRows} 条`;
+          }
+          // Bug #259 - 删除最后一条报表后显示空结果提示
+          if (remainingRows === 0 && tbody) {
+            let noResultRow = tbody.querySelector('.no-results-row');
+            if (!noResultRow) {
+              noResultRow = document.createElement('tr');
+              noResultRow.className = 'no-results-row';
+              const colCount = reportTable.querySelectorAll('thead th').length || 7;
+              noResultRow.innerHTML = `<td colspan="${colCount}" style="text-align:center;padding:48px 20px;color:var(--text-tertiary);">未找到匹配的报表</td>`;
+              tbody.appendChild(noResultRow);
+            }
           }
         }, 300);
       }
@@ -2324,6 +2598,8 @@ function initMiscButtons() {
   });
 
   // Bug #55 - Chart refresh and settings buttons on overview page
+  // Bug #271 - 图表刷新按钮防抖
+  // Bug #279 - 使用DataVision命名空间管理防抖定时器
   const overviewChartActions = document.querySelectorAll('#overview .chart-actions');
   overviewChartActions.forEach(actionGroup => {
     const buttons = actionGroup.querySelectorAll('.btn-icon');
@@ -2331,34 +2607,51 @@ function initMiscButtons() {
       btn.addEventListener('click', () => {
         const ariaLabel = btn.getAttribute('aria-label') || '';
         if (ariaLabel.includes('刷新')) {
-          // Regenerate random data for the chart
-          const chartCard = btn.closest('.chart-card');
-          if (chartCard) {
-            const canvas = chartCard.querySelector('canvas');
-            if (canvas) {
-              const chart = chartInstances.find(c => c.canvas === canvas);
-              if (chart) {
-                // Bug #6 - Skip gauge charts (circumference === 180) to preserve sum=100
-                if (chart.options.circumference === 180) {
-                  showToast('仪表盘数据由系统实时更新', 'info');
-                  return;
-                }
-                chart.data.datasets.forEach(dataset => {
-                  if (Array.isArray(dataset.data)) {
-                    dataset.data = dataset.data.map(v => {
-                      if (typeof v === 'number') {
-                        const variation = v * (0.8 + Math.random() * 0.4);
-                        return Math.round(variation);
-                      }
-                      return v;
-                    });
+          // 防抖处理
+          if (DataVision.chartRefreshDebounceTimer) {
+            clearTimeout(DataVision.chartRefreshDebounceTimer);
+          }
+          DataVision.chartRefreshDebounceTimer = setTimeout(() => {
+            DataVision.chartRefreshDebounceTimer = null;
+            // Regenerate random data for the chart
+            const chartCard = btn.closest('.chart-card');
+            if (chartCard) {
+              const canvas = chartCard.querySelector('canvas');
+              if (canvas) {
+                const chart = chartInstances.find(c => c.canvas === canvas);
+                if (chart) {
+                  // Bug #6 - Skip gauge charts (circumference === 180) to preserve sum=100
+                  if (chart.options.circumference === 180) {
+                    showToast('仪表盘数据由系统实时更新', 'info');
+                    return;
                   }
-                });
-                chart.update();
+                  chart.data.datasets.forEach(dataset => {
+                    if (Array.isArray(dataset.data)) {
+                      dataset.data = dataset.data.map(v => {
+                        if (typeof v === 'number') {
+                          const variation = v * (0.8 + Math.random() * 0.4);
+                          return Math.round(variation);
+                        }
+                        return v;
+                      });
+                      // Bug #239 - 漏斗图数据单调递减检查
+                      if (chart.config.type === 'bar' && chart.canvas.id === 'funnelChart') {
+                        let prev = dataset.data[0];
+                        for (let i = 1; i < dataset.data.length; i++) {
+                          if (dataset.data[i] > prev) {
+                            dataset.data[i] = Math.max(1, prev - Math.floor(Math.random() * prev * 0.2));
+                          }
+                          prev = dataset.data[i];
+                        }
+                      }
+                    }
+                  });
+                  chart.update();
+                }
               }
             }
-          }
-          showToast('图表数据已刷新', 'success');
+            showToast('图表数据已刷新', 'success');
+          }, 300);
         } else if (ariaLabel.includes('设置')) {
           showToast('图表设置功能开发中', 'info');
         }
@@ -2366,7 +2659,7 @@ function initMiscButtons() {
     });
   });
 
-  // Bug #56 - Analysis chart refresh buttons
+      // Bug #56 - Analysis chart refresh buttons
   const analyticsChartActions = document.querySelectorAll('#analytics .chart-actions');
   analyticsChartActions.forEach(actionGroup => {
     const buttons = actionGroup.querySelectorAll('.btn-icon');
@@ -2396,6 +2689,17 @@ function initMiscButtons() {
                     });
                   }
                 });
+                // Bug #231, #248 - 漏斗图数据必须单调递减
+                if (canvas.id === 'funnelChart' && chart.data.datasets[0]) {
+                  const funnelData = chart.data.datasets[0].data;
+                  let prev = funnelData[0];
+                  for (let i = 1; i < funnelData.length; i++) {
+                    if (funnelData[i] > prev) {
+                      funnelData[i] = Math.max(1, prev - Math.floor(Math.random() * prev * 0.2));
+                    }
+                    prev = funnelData[i];
+                  }
+                }
                 chart.update();
               }
             }
@@ -2416,16 +2720,18 @@ function initMiscButtons() {
 function initGlobalClickHandler() {
   // Bug #94 - 使用事件委托优化性能
   // Bug #61 - Single document click listener
+  // Bug #255 - 每次点击时查询DOM引用，因为面板可能被重建
+
   DataVision.handlers.documentClick = (e) => {
     // Close dropdowns
     if (!e.target.closest('.action-dropdown') && !e.target.closest('.table-action-btn')) {
       closeAllDropdowns();
     }
 
-    // Close filter panel
+    // Close filter panel (每次查询，因为面板可能被重建)
     const filterPanel = document.querySelector('.filter-panel');
     const filterBtn = document.querySelector('#overview .table-actions .btn-secondary');
-    if (filterPanel && filterPanel.style.display === 'block' && !filterPanel.contains(e.target) && !filterBtn?.contains(e.target)) {
+    if (filterPanel && filterPanel.style.display === 'block' && !filterPanel.contains(e.target) && !(filterBtn && filterBtn.contains(e.target))) {
       filterPanel.style.display = 'none';
       // Bug #128 - 关闭filter panel时也清理resize监听器
       if (DataVision.handlers.filterResize) {
@@ -2434,10 +2740,10 @@ function initGlobalClickHandler() {
       }
     }
 
-    // Close notification panel
+    // Close notification panel (每次查询)
     const notifPanel = document.querySelector('.notification-panel');
     const notifBtn = document.getElementById('notifications');
-    if (notifPanel && !notifPanel.contains(e.target) && !notifBtn?.contains(e.target)) {
+    if (notifPanel && !notifPanel.contains(e.target) && !(notifBtn && notifBtn.contains(e.target))) {
       notifPanel.style.display = 'none';
       // Bug #48 - Clean up resize listener
       if (DataVision.handlers.notifResize) {
@@ -2457,12 +2763,12 @@ function initGlobalClickHandler() {
   document.addEventListener('keydown', DataVision.handlers.keydown);
 
   // Bug #8, #95 - Scroll should close all floating panels with throttling
-  let scrollTimeout = null;
+  // Bug #211 - 使用命名空间管理 scrollDebounceTimer
   DataVision.handlers.scroll = () => {
-    if (scrollTimeout) return;
-    scrollTimeout = setTimeout(() => {
+    if (DataVision.scrollDebounceTimer) return;
+    DataVision.scrollDebounceTimer = setTimeout(() => {
       closeAllPanels();
-      scrollTimeout = null;
+      DataVision.scrollDebounceTimer = null;
     }, 100);
   };
   window.addEventListener('scroll', DataVision.handlers.scroll, { passive: true });
